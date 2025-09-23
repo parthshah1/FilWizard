@@ -1,0 +1,600 @@
+package cmd
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/filecoin-project/lotus/chain/types"
+	"github.com/filecoin-project/lotus/chain/types/ethtypes"
+)
+
+type ProjectType string
+
+const (
+	ProjectTypeHardhat ProjectType = "hardhat"
+	ProjectTypeFoundry ProjectType = "foundry"
+)
+
+type ContractProject struct {
+	GitURL       string            `json:"git_url"`
+	GitRef       string            `json:"git_ref,omitempty"`
+	ProjectType  ProjectType       `json:"project_type"`
+	MainContract string            `json:"main_contract"`
+	ContractPath string            `json:"contract_path,omitempty"`
+	CloneDir     string            `json:"clone_dir"`
+	GenerateAbi  bool              `json:"generate_abi,omitempty"`
+	Env          map[string]string `json:"env"`
+}
+
+type DeployedContract struct {
+	Name               string              `json:"name"`
+	Address            ethtypes.EthAddress `json:"address"`
+	DeployerAddress    ethtypes.EthAddress `json:"deployer_address"`
+	DeployerPrivateKey string              `json:"deployer_private_key"`
+	TransactionHash    ethtypes.EthHash    `json:"txhash"`
+	AbiPath            string              `json:"abi_path"`
+	BindingsPath       string              `json:"bindings_path"`
+}
+
+type ContractManager struct {
+	workspaceDir    string
+	deploymentsFile string
+	deployerKey     string
+	rpcURL          string
+}
+
+func NewContractManager(workspaceDir, rpcURL string) *ContractManager {
+	absWorkspaceDir, _ := filepath.Abs(workspaceDir)
+	os.MkdirAll(absWorkspaceDir, 0755)
+	contractsDir := filepath.Join(absWorkspaceDir, "contracts")
+	os.MkdirAll(contractsDir, 0755)
+
+	return &ContractManager{
+		workspaceDir:    absWorkspaceDir,
+		deploymentsFile: filepath.Join(contractsDir, "deployments.json"),
+		rpcURL:          rpcURL,
+	}
+}
+
+func (cm *ContractManager) SetDeployerKey(privateKey string) {
+	cm.deployerKey = privateKey
+}
+
+func (cm *ContractManager) CloneRepository(project *ContractProject) error {
+	if err := os.MkdirAll(cm.workspaceDir, 0755); err != nil {
+		return fmt.Errorf("failed to create workspace directory: %w", err)
+	}
+
+	project.CloneDir = filepath.Join(cm.workspaceDir, fmt.Sprintf("project_%d", time.Now().Unix()))
+
+	cmd := exec.Command("git", "clone", project.GitURL, project.CloneDir)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to clone repository: %w, output: %s", err, output)
+	}
+
+	if project.GitRef != "" {
+		fmt.Printf("Checking out git reference: %s\n", project.GitRef)
+		originalDir, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("failed to get current directory: %w", err)
+		}
+		defer os.Chdir(originalDir)
+
+		if err := os.Chdir(project.CloneDir); err != nil {
+			return fmt.Errorf("failed to change to project directory: %w", err)
+		}
+
+		checkoutCmd := exec.Command("git", "checkout", project.GitRef)
+		checkoutOutput, err := checkoutCmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to checkout git reference '%s': %w, output: %s", project.GitRef, err, checkoutOutput)
+		}
+		fmt.Printf("Successfully checked out: %s\n", project.GitRef)
+	}
+
+	return nil
+}
+
+func (cm *ContractManager) CompileHardhatProject(project *ContractProject) error {
+	originalDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %w", err)
+	}
+	defer os.Chdir(originalDir)
+
+	if err := os.Chdir(project.CloneDir); err != nil {
+		return fmt.Errorf("failed to change to project directory: %w", err)
+	}
+
+	cmd := exec.Command("yarn", "install")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to install yarn dependencies: %w, output: %s", err, output)
+	}
+
+	if project.Env != nil {
+		cmd.Env = os.Environ()
+		for key, value := range project.Env {
+			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
+		}
+	}
+
+	return nil
+}
+
+func (cm *ContractManager) CreateDeployerAccount() (string, ethtypes.EthAddress, error) {
+	key, ethAddr, filAddr := NewAccount()
+
+	fundAmount := types.FromFil(10)
+	_, err := FundWallet(context.Background(), filAddr, fundAmount, true)
+	if err != nil {
+		return "", ethtypes.EthAddress{}, fmt.Errorf("failed to fund deployer account: %w", err)
+	}
+
+	privateKey := fmt.Sprintf("0x%x", key.PrivateKey)
+	cm.deployerKey = privateKey
+
+	return privateKey, ethAddr, nil
+}
+
+func (cm *ContractManager) DeployContract(project *ContractProject, contractPath string, constructorArgs []string, generateBindings bool) (*DeployedContract, error) {
+	if cm.deployerKey == "" {
+		return nil, fmt.Errorf("deployer key not set, create a deployer account first")
+	}
+
+	originalDir, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current directory: %w", err)
+	}
+	defer os.Chdir(originalDir)
+
+	if err := os.Chdir(project.CloneDir); err != nil {
+		return nil, fmt.Errorf("failed to change to project directory: %w", err)
+	}
+
+	args := []string{
+		"create",
+		"--rpc-url", cm.rpcURL,
+		"--private-key", cm.deployerKey,
+		"--broadcast",
+		contractPath,
+	}
+
+	if len(constructorArgs) > 0 {
+		args = append(args, "--constructor-args")
+		args = append(args, constructorArgs...)
+	}
+
+	cmd := exec.Command("forge", args...)
+	if project.Env != nil {
+		cmd.Env = os.Environ()
+		for key, value := range project.Env {
+			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
+		}
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("failed to deploy contract with forge: %w, output: %s", err, output)
+	}
+
+	deployedContract, err := cm.parseForgeCreateOutput(string(output), project, contractPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse forge create output: %w", err)
+	}
+
+	// Extract artifacts before cleanup
+	if err := cm.extractArtifacts(project, deployedContract, generateBindings); err != nil {
+		fmt.Printf("Warning: failed to extract artifacts: %v\n", err)
+	}
+
+	if err := cm.saveDeployment(deployedContract); err != nil {
+		return nil, fmt.Errorf("failed to save deployment: %w", err)
+	}
+
+	if err := cm.CleanupProject(project); err != nil {
+		fmt.Printf("Warning: Failed to cleanup project directory: %v\n", err)
+	}
+
+	return deployedContract, nil
+}
+
+func (cm *ContractManager) extractArtifacts(project *ContractProject, contract *DeployedContract, generateBindings bool) error {
+	contractsDir := filepath.Join(cm.workspaceDir, "contracts")
+	if err := os.MkdirAll(contractsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create contracts dir: %w", err)
+	}
+
+	// Extract ABI
+	abiPath, err := cm.extractABI(project, contract.Name)
+	if err != nil {
+		return fmt.Errorf("failed to extract ABI: %w", err)
+	}
+	contract.AbiPath = abiPath
+	fmt.Printf("Saved ABI for %s to %s\n", contract.Name, abiPath)
+
+	// Generate bindings if requested (using only ABI)
+	if generateBindings {
+		bindingsPath, err := cm.generateBindings(contract.Name, abiPath)
+		if err != nil {
+			return fmt.Errorf("failed to generate bindings: %w", err)
+		}
+		contract.BindingsPath = bindingsPath
+		fmt.Printf("Generated Go bindings for %s at %s\n", contract.Name, bindingsPath)
+	}
+
+	return nil
+}
+
+func (cm *ContractManager) extractABI(project *ContractProject, contractName string) (string, error) {
+	artifactDirs := []string{
+		filepath.Join(project.CloneDir, "out"),
+		filepath.Join(project.CloneDir, "artifacts"),
+		filepath.Join(project.CloneDir, "build"),
+	}
+
+	for _, dir := range artifactDirs {
+		if _, err := os.Stat(dir); err != nil {
+			continue
+		}
+
+		var abiData []byte
+		err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || filepath.Ext(path) != ".json" {
+				return nil
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+
+			var parsed map[string]interface{}
+			if err := json.Unmarshal(data, &parsed); err != nil {
+				return nil
+			}
+
+			if !cm.isTargetContract(path, parsed, contractName) {
+				return nil
+			}
+
+			if abiVal, ok := parsed["abi"]; ok {
+				fmt.Printf("Found ABI for contract '%s' in file: %s\n", contractName, path)
+				abiData, _ = json.Marshal(abiVal)
+				return errors.New("found")
+			}
+
+			return nil
+		})
+
+		if err != nil && err.Error() == "found" && len(abiData) > 0 {
+			abiPath := filepath.Join(cm.workspaceDir, "contracts", fmt.Sprintf("%s.abi.json", strings.ToLower(contractName)))
+			return abiPath, os.WriteFile(abiPath, abiData, 0644)
+		}
+	}
+
+	return "", fmt.Errorf("ABI not found for contract %s", contractName)
+}
+
+func (cm *ContractManager) extractBytecode(project *ContractProject, contractName string) (string, error) {
+	artifactDirs := []string{
+		filepath.Join(project.CloneDir, "out"),
+		filepath.Join(project.CloneDir, "artifacts"),
+		filepath.Join(project.CloneDir, "build"),
+	}
+
+	for _, dir := range artifactDirs {
+		if _, err := os.Stat(dir); err != nil {
+			continue
+		}
+
+		var bytecodeData []byte
+		err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || filepath.Ext(path) != ".json" {
+				return nil
+			}
+
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+
+			var parsed map[string]interface{}
+			if err := json.Unmarshal(data, &parsed); err != nil {
+				return nil
+			}
+
+			if !cm.isTargetContract(path, parsed, contractName) {
+				return nil
+			}
+
+			bytecodeFields := []string{"bytecode", "bin", "binary", "deployedBytecode"}
+			for _, field := range bytecodeFields {
+				if bytecodeVal, ok := parsed[field]; ok {
+					if bytecodeStr, ok := bytecodeVal.(string); ok && bytecodeStr != "" && bytecodeStr != "0x" {
+						fmt.Printf("Found bytecode for contract '%s' in field '%s' from file: %s\n", contractName, field, path)
+						bytecodeData = []byte(bytecodeStr)
+						return errors.New("found")
+					}
+				}
+			}
+
+			return nil
+		})
+
+		if err != nil && err.Error() == "found" && len(bytecodeData) > 0 {
+			bytecodePath := filepath.Join(cm.workspaceDir, "contracts", fmt.Sprintf("%s.bin", strings.ToLower(contractName)))
+			return bytecodePath, os.WriteFile(bytecodePath, bytecodeData, 0644)
+		}
+	}
+
+	return "", fmt.Errorf("bytecode not found for contract %s", contractName)
+}
+
+func (cm *ContractManager) isTargetContract(filePath string, parsed map[string]interface{}, contractName string) bool {
+	baseName := strings.TrimSuffix(filepath.Base(filePath), ".json")
+
+	if strings.EqualFold(baseName, contractName) {
+		return true
+	}
+
+	if v, ok := parsed["contractName"]; ok {
+		if nameStr, ok := v.(string); ok && strings.EqualFold(nameStr, contractName) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (cm *ContractManager) generateBindings(contractName, abiPath string) (string, error) {
+	contractsDir := filepath.Join(cm.workspaceDir, "contracts")
+	bindingsPath := filepath.Join(contractsDir, fmt.Sprintf("%s.go", strings.ToLower(contractName)))
+
+	cmd := exec.Command("abigen",
+		"--abi", abiPath,
+		"--pkg", "contracts",
+		"--type", contractName,
+		"--out", bindingsPath)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate Go bindings: %w, output: %s", err, string(output))
+	}
+
+	return bindingsPath, nil
+}
+
+func (cm *ContractManager) parseForgeCreateOutput(output string, project *ContractProject, contractPath string) (*DeployedContract, error) {
+	lines := strings.Split(output, "\n")
+	var contractAddr string
+
+	for _, line := range lines {
+		if strings.Contains(line, "Deployed to:") {
+			parts := strings.Split(line, "Deployed to:")
+			if len(parts) > 1 {
+				contractAddr = strings.TrimSpace(parts[1])
+				break
+			}
+		}
+	}
+
+	if contractAddr == "" {
+		return nil, fmt.Errorf("failed to extract contract address from forge create output: %s", output)
+	}
+
+	ethAddr, err := ethtypes.ParseEthAddress(contractAddr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse contract address: %w", err)
+	}
+
+	cmd := exec.Command("cast", "wallet", "address", "--private-key", cm.deployerKey)
+	deployerOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get deployer address: %w", err)
+	}
+
+	deployerAddr, err := ethtypes.ParseEthAddress(strings.TrimSpace(string(deployerOutput)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse deployer address: %w", err)
+	}
+
+	return &DeployedContract{
+		Name:               project.MainContract,
+		Address:            ethAddr,
+		DeployerAddress:    deployerAddr,
+		DeployerPrivateKey: cm.deployerKey,
+		TransactionHash:    ethtypes.EthHash{},
+	}, nil
+}
+
+func (cm *ContractManager) RunCustomDeployScript(project *ContractProject, scriptPath string) error {
+	originalDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %w", err)
+	}
+	defer os.Chdir(originalDir)
+
+	if err := os.Chdir(project.CloneDir); err != nil {
+		return fmt.Errorf("failed to change to project directory: %w", err)
+	}
+
+	if err := os.Chmod(scriptPath, 0755); err != nil {
+		return fmt.Errorf("failed to make script executable: %w", err)
+	}
+
+	cmd := exec.Command("bash", scriptPath)
+	cmd.Env = os.Environ()
+	if project.Env != nil {
+		for key, value := range project.Env {
+			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
+		}
+	}
+
+	if cm.deployerKey != "" {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("PRIVATE_KEY=%s", cm.deployerKey))
+	}
+
+	if cm.rpcURL != "" {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("RPC_URL=%s", cm.rpcURL))
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to run deployment script: %w, output: %s", err, output)
+	}
+
+	log.Printf("Deployment script output: %s", string(output))
+
+	if err := cm.CleanupProject(project); err != nil {
+		fmt.Printf("Warning: Failed to cleanup project directory: %v\n", err)
+	}
+
+	return nil
+}
+
+func (cm *ContractManager) RunShellCommands(project *ContractProject, commands string) error {
+	originalDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %w", err)
+	}
+	defer os.Chdir(originalDir)
+
+	if err := os.Chdir(project.CloneDir); err != nil {
+		return fmt.Errorf("failed to change to project directory: %w", err)
+	}
+
+	commandList := strings.Split(commands, ";")
+	for i, cmdStr := range commandList {
+		cmdStr = strings.TrimSpace(cmdStr)
+		if cmdStr == "" {
+			continue
+		}
+
+		fmt.Printf("Running command %d/%d: %s\n", i+1, len(commandList), cmdStr)
+
+		cmd := exec.Command("sh", "-c", cmdStr)
+		cmd.Env = os.Environ()
+		if project.Env != nil {
+			for key, value := range project.Env {
+				cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
+			}
+		}
+
+		if cm.deployerKey != "" {
+			cmd.Env = append(cmd.Env, fmt.Sprintf("PRIVATE_KEY=%s", cm.deployerKey))
+		}
+
+		if cm.rpcURL != "" {
+			cmd.Env = append(cmd.Env, fmt.Sprintf("RPC_URL=%s", cm.rpcURL))
+		}
+
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to run command '%s': %w, output: %s", cmdStr, err, output)
+		}
+
+		log.Printf("Command output: %s", string(output))
+	}
+
+	if err := cm.CleanupProject(project); err != nil {
+		fmt.Printf("Warning: Failed to cleanup project directory: %v\n", err)
+	}
+
+	return nil
+}
+
+func (cm *ContractManager) saveDeployment(contract *DeployedContract) error {
+	var deployments []*DeployedContract
+
+	if data, err := os.ReadFile(cm.deploymentsFile); err == nil {
+		if err := json.Unmarshal(data, &deployments); err != nil {
+			return fmt.Errorf("failed to parse existing deployments: %w", err)
+		}
+	}
+
+	deployments = append(deployments, contract)
+
+	data, err := json.MarshalIndent(deployments, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal deployments: %w", err)
+	}
+
+	dir := filepath.Dir(cm.deploymentsFile)
+	os.MkdirAll(dir, 0755)
+
+	return os.WriteFile(cm.deploymentsFile, data, 0644)
+}
+
+func (cm *ContractManager) LoadDeployments() ([]*DeployedContract, error) {
+	var deployments []*DeployedContract
+
+	data, err := os.ReadFile(cm.deploymentsFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return deployments, nil
+		}
+		return nil, fmt.Errorf("failed to read deployments file: %w", err)
+	}
+
+	if err := json.Unmarshal(data, &deployments); err != nil {
+		return nil, fmt.Errorf("failed to parse deployments: %w", err)
+	}
+
+	return deployments, nil
+}
+
+func (cm *ContractManager) GetDeployment(contractName string) (*DeployedContract, error) {
+	deployments, err := cm.LoadDeployments()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, deployment := range deployments {
+		if deployment.Name == contractName {
+			return deployment, nil
+		}
+	}
+
+	return nil, fmt.Errorf("deployment not found for contract: %s", contractName)
+}
+
+func (cm *ContractManager) CleanupProject(project *ContractProject) error {
+	if project.CloneDir == "" {
+		return nil
+	}
+
+	fmt.Printf("Cleaning up project directory: %s\n", project.CloneDir)
+	if err := os.RemoveAll(project.CloneDir); err != nil {
+		return fmt.Errorf("failed to remove project directory %s: %w", project.CloneDir, err)
+	}
+
+	fmt.Printf("Successfully cleaned up project directory\n")
+	return nil
+}
+
+func (cm *ContractManager) CleanupWorkspace() error {
+	entries, err := os.ReadDir(cm.workspaceDir)
+	if err != nil {
+		return fmt.Errorf("failed to read workspace directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), "project_") {
+			projectPath := filepath.Join(cm.workspaceDir, entry.Name())
+			if err := os.RemoveAll(projectPath); err != nil {
+				return fmt.Errorf("failed to remove project directory %s: %w", projectPath, err)
+			}
+		}
+	}
+
+	return nil
+}

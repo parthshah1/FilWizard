@@ -145,6 +145,10 @@ var WalletCmd = &cli.Command{
 					Name:  "fund",
 					Usage: "Amount to fund each wallet (FIL)",
 				},
+				&cli.BoolFlag{
+					Name:  "show-private-key",
+					Usage: "Show private key in output (for Ethereum wallets)",
+				},
 			},
 			Action: func(c *cli.Context) error {
 				ctx := context.Background()
@@ -153,21 +157,7 @@ var WalletCmd = &cli.Command{
 				walletType := c.String("type")
 				keyTypeStr := c.String("key-type")
 				fundAmountStr := c.String("fund")
-
-				if walletType == "ethereum" {
-					return fmt.Errorf("ethereum wallets not supported yet")
-				}
-
-				// Parse key type
-				var keyType types.KeyType
-				switch keyTypeStr {
-				case "secp256k1":
-					keyType = types.KTSecp256k1
-				case "bls":
-					keyType = types.KTBLS
-				default:
-					return fmt.Errorf("invalid key type: %s (use secp256k1 or bls)", keyTypeStr)
-				}
+				showPrivateKey := c.Bool("show-private-key")
 
 				// Parse fund amount if provided
 				var fundAmount abi.TokenAmount
@@ -177,28 +167,72 @@ var WalletCmd = &cli.Command{
 					fundAmount = types.BigMul(amount, types.NewInt(1e18))
 				}
 
-				// Create wallets
-				createdWallets := make([]address.Address, 0, count)
-				for i := 0; i < count; i++ {
-					addr, err := CreateWallet(ctx, keyType)
-					if err != nil {
-						return fmt.Errorf("failed to create wallet %d: %w", i+1, err)
-					}
-					createdWallets = append(createdWallets, addr)
-					fmt.Printf("Created wallet %d: %s\n", i+1, addr)
+				if walletType == "ethereum" {
+					// Create Ethereum wallets
+					fmt.Printf("Creating %d Ethereum wallet(s):\n", count)
 
-					// Fund wallet if amount specified
-					if !fundAmount.IsZero() {
-						smsg, err := FundWallet(ctx, addr, fundAmount, true)
-						if err != nil {
-							fmt.Printf("Warning: failed to fund wallet %s: %v\n", addr, err)
-						} else {
-							fmt.Printf("Funded wallet %s with %s FIL (tx: %s)\n", addr, fundAmountStr, smsg.Cid())
+					for i := 0; i < count; i++ {
+						key, ethAddr, filAddr := NewAccount()
+						if key == nil {
+							return fmt.Errorf("failed to create wallet %d", i+1)
+						}
+
+						fmt.Printf("\nWallet %d:\n", i+1)
+						fmt.Printf("  Ethereum Address: %s\n", ethAddr)
+						fmt.Printf("  Filecoin Address: %s\n", filAddr)
+
+						if showPrivateKey {
+							fmt.Printf("  Private Key: %x\n", key.PrivateKey)
+						}
+
+						// Fund wallet if amount specified
+						if !fundAmount.IsZero() {
+							_, err := FundWallet(ctx, filAddr, fundAmount, true)
+							if err != nil {
+								fmt.Printf("  Warning: failed to fund wallet: %v\n", err)
+							} else {
+								fmt.Printf("  Funded with %s FIL\n", fundAmountStr)
+							}
 						}
 					}
-				}
 
-				fmt.Printf("\nSuccessfully created %d %s wallet(s)\n", len(createdWallets), walletType)
+					fmt.Printf("\nSuccessfully created %d Ethereum wallet(s)\n", count)
+				} else {
+					// Create Filecoin wallets
+					// Parse key type
+					var keyType types.KeyType
+					switch keyTypeStr {
+					case "secp256k1":
+						keyType = types.KTSecp256k1
+					case "bls":
+						keyType = types.KTBLS
+					default:
+						return fmt.Errorf("invalid key type: %s (use secp256k1 or bls)", keyTypeStr)
+					}
+
+					// Create wallets
+					createdWallets := make([]address.Address, 0, count)
+					for i := 0; i < count; i++ {
+						addr, err := CreateWallet(ctx, keyType)
+						if err != nil {
+							return fmt.Errorf("failed to create wallet %d: %w", i+1, err)
+						}
+						createdWallets = append(createdWallets, addr)
+						fmt.Printf("Created wallet %d: %s\n", i+1, addr)
+
+						// Fund wallet if amount specified
+						if !fundAmount.IsZero() {
+							smsg, err := FundWallet(ctx, addr, fundAmount, true)
+							if err != nil {
+								fmt.Printf("Warning: failed to fund wallet %s: %v\n", addr, err)
+							} else {
+								fmt.Printf("Funded wallet %s with %s FIL (tx: %s)\n", addr, fundAmountStr, smsg.Cid())
+							}
+						}
+					}
+
+					fmt.Printf("\nSuccessfully created %d %s wallet(s)\n", len(createdWallets), walletType)
+				}
 				return nil
 			},
 		},
@@ -288,73 +322,6 @@ var WalletCmd = &cli.Command{
 				// Convert attoFIL to FIL for display
 				filBalance := types.BigDiv(balance, types.NewInt(1e18))
 				fmt.Printf("Balance for %s: %s FIL (%s attoFIL)\n", addr, filBalance.String(), balance.String())
-				return nil
-			},
-		},
-		{
-			Name:  "eth",
-			Usage: "Create and fund ethereum wallets",
-			Flags: []cli.Flag{
-				&cli.IntFlag{
-					Name:  "count",
-					Value: 1,
-					Usage: "Number of wallets to create",
-				},
-				&cli.StringFlag{
-					Name:  "fund",
-					Value: "1",
-					Usage: "Amount to fund each wallet (FIL)",
-				},
-				&cli.BoolFlag{
-					Name:  "show-private-key",
-					Usage: "Show private key in output",
-				},
-			},
-			Action: func(c *cli.Context) error {
-				ctx := context.Background()
-				count := c.Int("count")
-				fundAmountStr := c.String("fund")
-				showPrivateKey := c.Bool("show-private-key")
-
-				// Parse fund amount
-				var fundAmount abi.TokenAmount
-				if fundAmountStr != "" {
-					amount, _ := big.FromString(fundAmountStr)
-					if amount.IsZero() {
-						return fmt.Errorf("invalid fund amount: %s", fundAmountStr)
-					}
-					// Convert FIL to attoFIL
-					fundAmount = types.BigMul(amount, types.NewInt(1e18))
-				}
-
-				fmt.Printf("Creating %d Ethereum wallet(s):\n", count)
-
-				for i := 0; i < count; i++ {
-					key, ethAddr, filAddr := NewAccount()
-					if key == nil {
-						return fmt.Errorf("failed to create wallet %d", i+1)
-					}
-
-					fmt.Printf("\nWallet %d:\n", i+1)
-					fmt.Printf("  Ethereum Address: %s\n", ethAddr)
-					fmt.Printf("  Filecoin Address: %s\n", filAddr)
-
-					if showPrivateKey {
-						fmt.Printf("  Private Key: %x\n", key.PrivateKey)
-					}
-
-					// Fund wallet if amount specified
-					if !fundAmount.IsZero() {
-						_, err := FundWallet(ctx, filAddr, fundAmount, true)
-						if err != nil {
-							fmt.Printf("  Warning: failed to fund wallet: %v\n", err)
-						} else {
-							fmt.Printf("  Funded with %s FIL\n", fundAmountStr)
-						}
-					}
-				}
-
-				fmt.Printf("\nSuccessfully created %d Ethereum wallet(s)\n", count)
 				return nil
 			},
 		},
