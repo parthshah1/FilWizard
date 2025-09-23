@@ -2,19 +2,23 @@ package cmd
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/filecoin-project/go-address"
-	"github.com/filecoin-project/go-state-types/big"
-	"github.com/filecoin-project/go-state-types/crypto"
+	filbig "github.com/filecoin-project/go-state-types/big"
+	filcrypto "github.com/filecoin-project/go-state-types/crypto"
 	"github.com/filecoin-project/lotus/api"
 	"github.com/filecoin-project/lotus/chain/types"
 	"github.com/filecoin-project/lotus/chain/types/ethtypes"
@@ -32,7 +36,7 @@ func SignTransaction(tx *ethtypes.Eth1559TxArgs, privateKey []byte) {
 		log.Printf("Failed to convert transaction to RLP: %v", err)
 		return
 	}
-	signature, err := sigs.Sign(crypto.SigTypeDelegated, privateKey, preimage)
+	signature, err := sigs.Sign(filcrypto.SigTypeDelegated, privateKey, preimage)
 	if err != nil {
 		log.Printf("Failed to sign transaction: %v", err)
 		return
@@ -89,7 +93,7 @@ func DeployContract(ctx context.Context, contractPath string, deployer string, f
 
 	// Fund deployer account if needed
 	if fundAmount != "" {
-		amount, _ := big.FromString(fundAmount)
+		amount, _ := filbig.FromString(fundAmount)
 		fundAmountAtto := types.BigMul(amount, types.NewInt(1e18))
 
 		_, err := FundWallet(ctx, deployerAddr, fundAmountAtto, true)
@@ -145,15 +149,15 @@ func DeployContract(ctx context.Context, contractPath string, deployer string, f
 	// Create EIP-1559 transaction
 	tx := ethtypes.Eth1559TxArgs{
 		ChainID:              31415926,
-		Value:                big.Zero(),
+		Value:                filbig.Zero(),
 		Nonce:                int(nonce),
 		MaxFeePerGas:         types.NanoFil,
-		MaxPriorityFeePerGas: big.Int(maxPriorityFee),
+		MaxPriorityFeePerGas: filbig.Int(maxPriorityFee),
 		GasLimit:             int(gasLimit),
 		Input:                contract,
-		V:                    big.Zero(),
-		R:                    big.Zero(),
-		S:                    big.Zero(),
+		V:                    filbig.Zero(),
+		R:                    filbig.Zero(),
+		S:                    filbig.Zero(),
 	}
 
 	fmt.Printf("Transaction details:\n")
@@ -695,15 +699,46 @@ var ContractCmd = &cli.Command{
 		{
 			Name:      "call",
 			Usage:     "Call a contract method",
-			ArgsUsage: "<address> <method> [args...]",
-			Action: func(c *cli.Context) error {
-				if c.NArg() < 2 {
-					return fmt.Errorf("expected at least 2 arguments: <address> <method>")
-				}
-				fmt.Println("Contract calls are not yet implemented")
-				fmt.Println("This feature will be added in a future iteration")
-				return nil
+			ArgsUsage: "<contract-address> <method-name>",
+			Flags: []cli.Flag{
+				&cli.StringFlag{
+					Name:     "contract",
+					Usage:    "Contract address",
+					Required: true,
+				},
+				&cli.StringFlag{
+					Name:     "method",
+					Usage:    "Method name to call",
+					Required: true,
+				},
+				&cli.StringFlag{
+					Name:  "rpc-url",
+					Usage: "RPC URL for contract interaction",
+					Value: "http://localhost:1234/rpc/v1",
+				},
+				&cli.StringFlag{
+					Name:  "args",
+					Usage: "Method arguments (comma-separated)",
+				},
+				&cli.StringFlag{
+					Name:  "types",
+					Usage: "Argument types (comma-separated: address,uint256,bool,string)",
+				},
+				&cli.BoolFlag{
+					Name:  "transaction",
+					Usage: "Send as transaction (for state-changing functions)",
+				},
+				&cli.StringFlag{
+					Name:  "private-key",
+					Usage: "Private key for transaction signing (hex format, 0x prefix optional)",
+				},
+				&cli.Uint64Flag{
+					Name:  "gas-limit",
+					Usage: "Gas limit for transaction (0 = auto-estimate)",
+					Value: 0,
+				},
 			},
+			Action: callContractMethod,
 		},
 	},
 }
@@ -1003,4 +1038,134 @@ func deployWithShellCommands(c *cli.Context) error {
 	}
 	fmt.Printf("Shell commands completed successfully\n")
 	return nil
+}
+
+func callContractMethod(c *cli.Context) error {
+	contractAddress := c.String("contract")
+	methodName := c.String("method")
+	rpcURL := c.String("rpc-url")
+	argsStr := c.String("args")
+	typesStr := c.String("types")
+	isTransaction := c.Bool("transaction")
+	privateKeyStr := c.String("private-key")
+	gasLimit := c.Uint64("gas-limit")
+
+	var args, types []string
+	if argsStr != "" {
+		args = strings.Split(argsStr, ",")
+		for i, arg := range args {
+			args[i] = strings.TrimSpace(arg)
+		}
+	}
+	if typesStr != "" {
+		types = strings.Split(typesStr, ",")
+		for i, t := range types {
+			types[i] = strings.TrimSpace(t)
+		}
+	}
+
+	if len(args) != len(types) {
+		return fmt.Errorf("number of arguments (%d) must match number of types (%d)", len(args), len(types))
+	}
+
+	wrapper, err := NewContractWrapper(rpcURL, contractAddress)
+	if err != nil {
+		return fmt.Errorf("failed to create contract wrapper: %w", err)
+	}
+	defer wrapper.Close()
+
+	convertedArgs, err := convertArguments(args, types)
+	if err != nil {
+		return fmt.Errorf("failed to convert arguments: %w", err)
+	}
+
+	if isTransaction {
+		if privateKeyStr == "" {
+			return fmt.Errorf("private key is required for transactions")
+		}
+
+		privateKey, err := parsePrivateKey(privateKeyStr)
+		if err != nil {
+			return fmt.Errorf("failed to parse private key: %w", err)
+		}
+
+		tx, err := wrapper.SendTransaction(methodName, convertedArgs, privateKey, gasLimit)
+		if err != nil {
+			return fmt.Errorf("failed to send transaction: %w", err)
+		}
+
+		fmt.Printf("Transaction sent successfully!\n")
+		fmt.Printf("Method: %s\n", methodName)
+		fmt.Printf("Transaction Hash: %s\n", tx.Hash().Hex())
+		fmt.Printf("Gas Limit: %d\n", tx.Gas())
+		fmt.Printf("Gas Price: %s\n", tx.GasPrice().String())
+	} else {
+		result, err := wrapper.CallMethod(methodName, convertedArgs)
+		if err != nil {
+			return fmt.Errorf("failed to call contract method: %w", err)
+		}
+
+		fmt.Printf("Method: %s\n", methodName)
+		fmt.Printf("Result: 0x%x\n", result)
+	}
+
+	return nil
+}
+
+func convertArguments(args, types []string) ([]interface{}, error) {
+	if len(args) != len(types) {
+		return nil, fmt.Errorf("argument count mismatch")
+	}
+
+	converted := make([]interface{}, len(args))
+	for i, arg := range args {
+		argType := types[i]
+		convertedArg, err := convertArgument(arg, argType)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert argument %d (%s): %w", i, arg, err)
+		}
+		converted[i] = convertedArg
+	}
+
+	return converted, nil
+}
+
+func convertArgument(arg, argType string) (interface{}, error) {
+	switch argType {
+	case "address":
+		return common.HexToAddress(arg), nil
+	case "uint256", "uint":
+		val, ok := new(big.Int).SetString(arg, 10)
+		if !ok {
+			return nil, fmt.Errorf("invalid uint256 value: %s", arg)
+		}
+		return val, nil
+	case "bool":
+		return arg == "true", nil
+	case "string":
+		return arg, nil
+	default:
+		return nil, fmt.Errorf("unsupported type: %s", argType)
+	}
+}
+
+func parsePrivateKey(privateKeyStr string) (*ecdsa.PrivateKey, error) {
+	// Remove 0x prefix if present
+	if strings.HasPrefix(privateKeyStr, "0x") {
+		privateKeyStr = privateKeyStr[2:]
+	}
+
+	// Parse hex string
+	privateKeyBytes, err := hex.DecodeString(privateKeyStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid hex format: %w", err)
+	}
+
+	// Create private key
+	privateKey, err := crypto.ToECDSA(privateKeyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("invalid private key: %w", err)
+	}
+
+	return privateKey, nil
 }

@@ -18,7 +18,7 @@ var (
 func NewApp() *cli.App {
 	app := &cli.App{
 		Name:  "mpool-tx",
-		Usage: "Filecoin mempool and contract testing tool",
+		Usage: "Filecoin testing tool",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "rpc",
