@@ -179,7 +179,6 @@ func DeployContract(ctx context.Context, contractPath string, deployer string, f
 		fmt.Printf("Contract deployed successfully!\n")
 		fmt.Printf("Contract Address: %s\n", receipt.ContractAddress)
 
-		// Save deployment artifacts
 		if err := saveDeploymentArtifacts(contractPath, receipt.ContractAddress.String(), txHash, deployerAddr, ethAddr, key, generateBindings, workspace, contractName, abiPath); err != nil {
 			fmt.Printf("Warning: failed to save deployment artifacts: %v\n", err)
 		}
@@ -191,7 +190,6 @@ func DeployContract(ctx context.Context, contractPath string, deployer string, f
 	return nil
 }
 
-// saveDeploymentArtifacts saves deployment information and artifacts to workspace
 func saveDeploymentArtifacts(contractPath, contractAddress string, txHash ethtypes.EthHash, deployerAddr address.Address, ethAddr ethtypes.EthAddress, key *key.Key, generateBindings bool, workspace, contractName, abiPath string) error {
 	manager := NewContractManager(workspace, "")
 
@@ -238,13 +236,11 @@ func saveDeploymentArtifacts(contractPath, contractAddress string, txHash ethtyp
 	finalAbiPath := filepath.Join(contractsDir, fmt.Sprintf("%s.abi.json", strings.ToLower(contractName)))
 
 	if abiPath != "" {
-		// Use provided ABI file
 		abiData, err := os.ReadFile(abiPath)
 		if err != nil {
 			return fmt.Errorf("failed to read provided ABI file: %w", err)
 		}
 
-		// Validate ABI JSON
 		var abiDataParsed interface{}
 		if err := json.Unmarshal(abiData, &abiDataParsed); err != nil {
 			return fmt.Errorf("invalid ABI JSON in provided file: %w", err)
@@ -258,7 +254,6 @@ func saveDeploymentArtifacts(contractPath, contractAddress string, txHash ethtyp
 	} else {
 		fmt.Printf("Creating minimal ABI. Use --abi flag to provide proper ABI file.\n")
 
-		// Create a minimal ABI for hex deployments (empty ABI)
 		minimalABI := []interface{}{}
 		abiBytes, err := json.Marshal(minimalABI)
 		if err != nil {
@@ -274,7 +269,6 @@ func saveDeploymentArtifacts(contractPath, contractAddress string, txHash ethtyp
 
 	deployedContract.AbiPath = finalAbiPath
 
-	// Generate Go bindings if requested
 	if generateBindings {
 		if bindingsPath, err := generateGoBindingsFromHex(contractName, finalAbiPath, bytecodePath, contractsDir); err == nil {
 			deployedContract.BindingsPath = bindingsPath
@@ -284,7 +278,6 @@ func saveDeploymentArtifacts(contractPath, contractAddress string, txHash ethtyp
 		}
 	}
 
-	// Save deployment information
 	if err := manager.saveDeployment(deployedContract); err != nil {
 		return fmt.Errorf("failed to save deployment info: %w", err)
 	}
@@ -293,7 +286,6 @@ func saveDeploymentArtifacts(contractPath, contractAddress string, txHash ethtyp
 	return nil
 }
 
-// generateGoBindingsFromHex generates Go bindings from hex file deployment
 func generateGoBindingsFromHex(contractName, abiPath, bytecodePath, contractsDir string) (string, error) {
 	bindingsPath := filepath.Join(contractsDir, fmt.Sprintf("%s.go", strings.ToLower(contractName)))
 
@@ -312,7 +304,6 @@ func generateGoBindingsFromHex(contractName, abiPath, bytecodePath, contractsDir
 	return bindingsPath, nil
 }
 
-// getForgeABI gets ABI using forge inspect
 func getForgeABI(contractPath, contractName, contractsDir string) (string, error) {
 	cmd := exec.Command("forge", "inspect", contractPath, contractName, "abi")
 	output, err := cmd.CombinedOutput()
@@ -501,7 +492,6 @@ var ContractCmd = &cli.Command{
 				manager := NewContractManager(workspace, "")
 
 				for _, cdef := range cfg.Contracts {
-					// Use the provided name as the clone directory name (sanitized)
 					name := strings.ToLower(cdef.Name)
 					name = strings.ReplaceAll(name, " ", "-")
 					project := &ContractProject{
@@ -656,7 +646,6 @@ func deployFromLocal(c *cli.Context) error {
 	deployerKey := c.String("deployer-key")
 	generateBindings := c.Bool("bindings")
 
-	// Read config file
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return fmt.Errorf("failed to read config file: %w", err)
@@ -678,10 +667,7 @@ func deployFromLocal(c *cli.Context) error {
 		return fmt.Errorf("failed to parse config file: %w", err)
 	}
 
-	// Create contract manager
 	manager := NewContractManager(workspace, rpcURL)
-
-	// Handle deployer account
 	if createDeployer {
 		fmt.Println("Creating new deployer account...")
 		privateKey, address, err := manager.CreateDeployerAccount()
@@ -696,9 +682,7 @@ func deployFromLocal(c *cli.Context) error {
 		return fmt.Errorf("either --create-deployer or --deployer-key must be provided")
 	}
 
-	// Deploy each contract from local clone
 	for _, cdef := range cfg.Contracts {
-		// Use the sanitized name as the clone directory name (same as clone-config)
 		name := strings.ToLower(cdef.Name)
 		name = strings.ReplaceAll(name, " ", "-")
 		localCloneDir := filepath.Join(workspace, name)
@@ -709,7 +693,6 @@ func deployFromLocal(c *cli.Context) error {
 			continue
 		}
 
-		// Check if the local clone exists
 		if _, err := os.Stat(absLocalCloneDir); os.IsNotExist(err) {
 			fmt.Printf("Warning: local clone directory %s does not exist, skipping %s\n", absLocalCloneDir, cdef.Name)
 			continue
@@ -717,7 +700,6 @@ func deployFromLocal(c *cli.Context) error {
 
 		fmt.Printf("====== Deploying %s from local clone ======\n", cdef.Name)
 
-		// Create project configuration pointing to local clone
 		project := &ContractProject{
 			Name:         cdef.Name,
 			GitURL:       cdef.GitURL,
@@ -725,17 +707,14 @@ func deployFromLocal(c *cli.Context) error {
 			ProjectType:  ProjectType(cdef.ProjectType),
 			MainContract: cdef.MainContract,
 			ContractPath: cdef.ContractPath,
-			CloneDir:     absLocalCloneDir, // Use absolute path to existing local clone
+			CloneDir:     absLocalCloneDir,
 			Env:          make(map[string]string),
 		}
-
-		// Parse constructor arguments
 		var constructorArgs []string
 		if len(cdef.ConstructorArgs) > 0 {
 			constructorArgs = cdef.ConstructorArgs
 		}
 
-		// Deploy contract using forge create (reuses existing local clone)
 		contractPath := fmt.Sprintf("%s:%s", project.ContractPath, project.MainContract)
 		deployedContract, err := manager.DeployContract(project, contractPath, constructorArgs, generateBindings, false)
 
@@ -744,7 +723,6 @@ func deployFromLocal(c *cli.Context) error {
 			continue
 		}
 
-		// Display deployment results
 		fmt.Printf("\nContract %s deployed successfully!\n", cdef.Name)
 		fmt.Printf("Contract: %s\n", deployedContract.Name)
 		fmt.Printf("Address: %s\n", deployedContract.Address.String())
@@ -776,10 +754,7 @@ func deployFromGit(c *cli.Context) error {
 		return fmt.Errorf("main-contract is required for deployment")
 	}
 
-	// Create contract manager
 	manager := NewContractManager(c.String("workspace"), c.String("rpc-url"))
-
-	// Handle deployer account
 	if c.Bool("create-deployer") {
 		fmt.Println("Creating new deployer account...")
 		privateKey, address, err := manager.CreateDeployerAccount()
@@ -794,7 +769,6 @@ func deployFromGit(c *cli.Context) error {
 		return fmt.Errorf("either --create-deployer or --deployer-key must be provided")
 	}
 
-	// Create project configuration
 	projectType := ProjectType(c.String("project-type"))
 	project := &ContractProject{
 		Name:         c.String("main-contract"),
@@ -806,12 +780,10 @@ func deployFromGit(c *cli.Context) error {
 		Env:          make(map[string]string),
 	}
 
-	// Set custom contract path if provided
 	if contractPath := c.String("contract-path"); contractPath != "" {
 		project.ContractPath = contractPath
 	}
 
-	// Parse environment variables
 	envVars := c.StringSlice("env")
 	for _, envVar := range envVars {
 		parts := strings.SplitN(envVar, "=", 2)
@@ -820,14 +792,11 @@ func deployFromGit(c *cli.Context) error {
 		}
 	}
 
-	// Clone repository
 	fmt.Printf("Cloning repository: %s\n", project.GitURL)
 	if err := manager.CloneRepository(project); err != nil {
 		return fmt.Errorf("failed to clone repository: %w", err)
 	}
 	fmt.Printf("Repository cloned to: %s\n", project.CloneDir)
-
-	// Determine if we need to compile first based on project type
 	if project.ProjectType == ProjectTypeHardhat {
 		fmt.Printf("Hardhat project detected - compiling first...\n")
 		if err := manager.CompileHardhatProject(project); err != nil {
@@ -838,7 +807,6 @@ func deployFromGit(c *cli.Context) error {
 		fmt.Printf("Foundry project - deploying directly with forge create...\n")
 	}
 
-	// Parse constructor arguments
 	var constructorArgs []string
 	if argsStr := c.String("constructor-args"); argsStr != "" {
 		constructorArgs = strings.Split(argsStr, ",")
@@ -847,13 +815,11 @@ func deployFromGit(c *cli.Context) error {
 		}
 	}
 
-	// Deploy contract
 	fmt.Printf("Deploying contract: %s\n", project.MainContract)
 	if len(constructorArgs) > 0 {
 		fmt.Printf("Constructor args: %v\n", constructorArgs)
 	}
 
-	// Check if using custom deployment script
 	if deployScript := c.String("deploy-script"); deployScript != "" {
 		fmt.Printf("Running custom deployment script: %s\n", deployScript)
 		if err := manager.RunCustomDeployScript(project, deployScript); err != nil {
@@ -863,7 +829,6 @@ func deployFromGit(c *cli.Context) error {
 		return nil
 	}
 
-	// Deploy contract using forge create
 	contractPath := fmt.Sprintf("%s:%s", project.ContractPath, project.MainContract)
 	generateBindings := c.Bool("bindings")
 	deployedContract, err := manager.DeployContract(project, contractPath, constructorArgs, generateBindings, true)
@@ -872,7 +837,6 @@ func deployFromGit(c *cli.Context) error {
 		return fmt.Errorf("failed to deploy contract: %w", err)
 	}
 
-	// Display deployment results
 	fmt.Printf("\nContract deployed successfully!\n")
 	fmt.Printf("Contract: %s\n", deployedContract.Name)
 	fmt.Printf("Address: %s\n", deployedContract.Address.String())
@@ -952,12 +916,8 @@ func cleanupWorkspace(c *cli.Context) error {
 	return nil
 }
 
-// deployWithCustomScript handles deployment using a custom script
 func deployWithCustomScript(c *cli.Context) error {
-	// Create contract manager
 	manager := NewContractManager(c.String("workspace"), c.String("rpc-url"))
-
-	// Handle deployer account
 	if c.Bool("create-deployer") {
 		fmt.Println("Creating new deployer account...")
 		privateKey, address, err := manager.CreateDeployerAccount()
@@ -972,7 +932,6 @@ func deployWithCustomScript(c *cli.Context) error {
 		return fmt.Errorf("either --create-deployer or --deployer-key must be provided")
 	}
 
-	// Create minimal project configuration for custom script
 	project := &ContractProject{
 		GitURL:   c.String("git-url"),
 		GitRef:   c.String("git-ref"),
@@ -1006,7 +965,6 @@ func deployWithCustomScript(c *cli.Context) error {
 	return nil
 }
 
-// deployWithShellCommands handles deployment using shell commands
 func deployWithShellCommands(c *cli.Context) error {
 	// Create contract manager
 	manager := NewContractManager(c.String("workspace"), c.String("rpc-url"))
@@ -1169,16 +1127,13 @@ func convertArgument(arg, argType string) (interface{}, error) {
 }
 
 func parsePrivateKey(privateKeyStr string) (*ecdsa.PrivateKey, error) {
-	// Remove 0x prefix if present
 	privateKeyStr = strings.TrimPrefix(privateKeyStr, "0x")
 
-	// Parse hex string
 	privateKeyBytes, err := hex.DecodeString(privateKeyStr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid hex format: %w", err)
 	}
 
-	// Create private key
 	privateKey, err := crypto.ToECDSA(privateKeyBytes)
 	if err != nil {
 		return nil, fmt.Errorf("invalid private key: %w", err)
