@@ -25,11 +25,11 @@ import (
 	"github.com/filecoin-project/lotus/chain/wallet/key"
 	"github.com/filecoin-project/lotus/lib/sigs"
 	_ "github.com/filecoin-project/lotus/lib/sigs/delegated"
+	"github.com/parthshah1/mpool-tx/config"
 
 	"github.com/urfave/cli/v2"
 )
 
-// SignTransaction signs an Ethereum transaction
 func SignTransaction(tx *ethtypes.Eth1559TxArgs, privateKey []byte) {
 	preimage, err := tx.ToRlpUnsignedMsg()
 	if err != nil {
@@ -48,8 +48,6 @@ func SignTransaction(tx *ethtypes.Eth1559TxArgs, privateKey []byte) {
 	}
 }
 
-// SubmitTransaction submits a signed Ethereum transaction to the network
-// Returns the transaction hash
 func SubmitTransaction(ctx context.Context, api api.FullNode, tx ethtypes.EthTransaction) ethtypes.EthHash {
 	signed, err := tx.ToRlpSignedMsg()
 	if err != nil {
@@ -64,11 +62,9 @@ func SubmitTransaction(ctx context.Context, api api.FullNode, tx ethtypes.EthTra
 	return txHash
 }
 
-// DeployContract deploys a smart contract
 func DeployContract(ctx context.Context, contractPath string, deployer string, fundAmount string, generateBindings bool, workspace string, contractName string, abiPath string) error {
 	fmt.Printf("Deploying smart contract from %s...\n", contractPath)
 
-	// Create new account for deployment if deployer not specified
 	var key *key.Key
 	var ethAddr ethtypes.EthAddress
 	var deployerAddr address.Address
@@ -83,7 +79,6 @@ func DeployContract(ctx context.Context, contractPath string, deployer string, f
 		deployerAddr = fil
 		fmt.Printf("Created deployer account: %s (ETH: %s)\n", deployerAddr, ethAddr)
 	} else {
-		// Parse existing deployer address
 		addr, err := address.NewFromString(deployer)
 		if err != nil {
 			return fmt.Errorf("invalid deployer address: %w", err)
@@ -91,7 +86,6 @@ func DeployContract(ctx context.Context, contractPath string, deployer string, f
 		deployerAddr = addr
 	}
 
-	// Fund deployer account if needed
 	if fundAmount != "" {
 		amount, _ := filbig.FromString(fundAmount)
 		fundAmountAtto := types.BigMul(amount, types.NewInt(1e18))
@@ -103,11 +97,9 @@ func DeployContract(ctx context.Context, contractPath string, deployer string, f
 		fmt.Printf("Funded deployer with %s FIL\n", fundAmount)
 	}
 
-	// Wait for funds to be available
 	fmt.Println("Waiting for funds to be available...")
 	time.Sleep(5 * time.Second)
 
-	// Read and decode contract
 	contractHex, err := os.ReadFile(contractPath)
 	if err != nil {
 		return fmt.Errorf("failed to read contract file: %w", err)
@@ -120,7 +112,6 @@ func DeployContract(ctx context.Context, contractPath string, deployer string, f
 
 	api := clientt.GetAPI()
 
-	// Estimate gas
 	gasParams, err := json.Marshal(ethtypes.EthEstimateGasParams{Tx: ethtypes.EthCall{
 		From: &ethAddr,
 		Data: contract,
@@ -134,19 +125,16 @@ func DeployContract(ctx context.Context, contractPath string, deployer string, f
 		return fmt.Errorf("failed to estimate gas: %w", err)
 	}
 
-	// Get gas fees
 	maxPriorityFee, err := api.EthMaxPriorityFeePerGas(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get max priority fee: %w", err)
 	}
 
-	// Get nonce
 	nonce, err := api.MpoolGetNonce(ctx, deployerAddr)
 	if err != nil {
 		return fmt.Errorf("failed to get nonce: %w", err)
 	}
 
-	// Create EIP-1559 transaction
 	tx := ethtypes.Eth1559TxArgs{
 		ChainID:              31415926,
 		Value:                filbig.Zero(),
@@ -165,7 +153,6 @@ func DeployContract(ctx context.Context, contractPath string, deployer string, f
 	fmt.Printf("  Max Priority Fee: %s\n", maxPriorityFee.String())
 	fmt.Printf("  Nonce: %d\n", nonce)
 
-	// Sign and submit transaction
 	fmt.Println("Signing and submitting transaction...")
 	if key != nil {
 		SignTransaction(&tx, key.PrivateKey)
@@ -176,11 +163,9 @@ func DeployContract(ctx context.Context, contractPath string, deployer string, f
 		return fmt.Errorf("failed to submit transaction")
 	}
 
-	// Wait for transaction to be mined
 	fmt.Println("Waiting for transaction to be mined...")
 	time.Sleep(10 * time.Second)
 
-	// Get transaction receipt
 	receipt, err := api.EthGetTransactionReceipt(ctx, txHash)
 	if err != nil {
 		return fmt.Errorf("failed to get transaction receipt: %w", err)
@@ -208,29 +193,23 @@ func DeployContract(ctx context.Context, contractPath string, deployer string, f
 
 // saveDeploymentArtifacts saves deployment information and artifacts to workspace
 func saveDeploymentArtifacts(contractPath, contractAddress string, txHash ethtypes.EthHash, deployerAddr address.Address, ethAddr ethtypes.EthAddress, key *key.Key, generateBindings bool, workspace, contractName, abiPath string) error {
-	// Create contract manager
 	manager := NewContractManager(workspace, "")
 
-	// Determine contract name
 	if contractName == "" {
-		// Extract name from contract file path
 		baseName := filepath.Base(contractPath)
 		contractName = strings.TrimSuffix(baseName, filepath.Ext(baseName))
 	}
 
-	// Parse contract address
 	contractEthAddr, err := ethtypes.ParseEthAddress(contractAddress)
 	if err != nil {
 		return fmt.Errorf("failed to parse contract address: %w", err)
 	}
 
-	// Get deployer private key
 	var deployerPrivateKey string
 	if key != nil {
 		deployerPrivateKey = fmt.Sprintf("0x%x", key.PrivateKey)
 	}
 
-	// Create deployed contract struct
 	deployedContract := &DeployedContract{
 		Name:               contractName,
 		Address:            contractEthAddr,
@@ -239,13 +218,11 @@ func saveDeploymentArtifacts(contractPath, contractAddress string, txHash ethtyp
 		TransactionHash:    txHash,
 	}
 
-	// Save contract bytecode
 	contractHex, err := os.ReadFile(contractPath)
 	if err != nil {
 		return fmt.Errorf("failed to read contract file: %w", err)
 	}
 
-	// Save bytecode to workspace
 	contractsDir := filepath.Join(workspace, "contracts")
 	if err := os.MkdirAll(contractsDir, 0755); err != nil {
 		return fmt.Errorf("failed to create contracts directory: %w", err)
@@ -258,7 +235,6 @@ func saveDeploymentArtifacts(contractPath, contractAddress string, txHash ethtyp
 
 	fmt.Printf("Saved contract bytecode to %s\n", bytecodePath)
 
-	// Handle ABI - either use provided ABI file or try to extract from source
 	finalAbiPath := filepath.Join(contractsDir, fmt.Sprintf("%s.abi.json", strings.ToLower(contractName)))
 
 	if abiPath != "" {
@@ -280,28 +256,20 @@ func saveDeploymentArtifacts(contractPath, contractAddress string, txHash ethtyp
 
 		fmt.Printf("Saved ABI from provided file to %s\n", finalAbiPath)
 	} else {
-		// Try to extract ABI from source files
-		extractedAbiPath, err := extractABIFromSource(contractPath, contractName, contractsDir)
+		fmt.Printf("Creating minimal ABI. Use --abi flag to provide proper ABI file.\n")
+
+		// Create a minimal ABI for hex deployments (empty ABI)
+		minimalABI := []interface{}{}
+		abiBytes, err := json.Marshal(minimalABI)
 		if err != nil {
-			fmt.Printf("Warning: failed to extract ABI from source: %v\n", err)
-			fmt.Printf("Creating minimal ABI. Use --abi flag to provide proper ABI file.\n")
-
-			// Create a minimal ABI for hex deployments (empty ABI)
-			minimalABI := []interface{}{}
-			abiBytes, err := json.Marshal(minimalABI)
-			if err != nil {
-				return fmt.Errorf("failed to marshal minimal ABI: %w", err)
-			}
-
-			if err := os.WriteFile(finalAbiPath, abiBytes, 0644); err != nil {
-				return fmt.Errorf("failed to save minimal ABI: %w", err)
-			}
-
-			fmt.Printf("Saved minimal ABI to %s\n", finalAbiPath)
-		} else {
-			finalAbiPath = extractedAbiPath
-			fmt.Printf("Extracted and saved ABI from source to %s\n", finalAbiPath)
+			return fmt.Errorf("failed to marshal minimal ABI: %w", err)
 		}
+
+		if err := os.WriteFile(finalAbiPath, abiBytes, 0644); err != nil {
+			return fmt.Errorf("failed to save minimal ABI: %w", err)
+		}
+
+		fmt.Printf("Saved minimal ABI to %s\n", finalAbiPath)
 	}
 
 	deployedContract.AbiPath = finalAbiPath
@@ -344,190 +312,25 @@ func generateGoBindingsFromHex(contractName, abiPath, bytecodePath, contractsDir
 	return bindingsPath, nil
 }
 
-// extractABIFromSource tries to extract ABI from Solidity source files
-func extractABIFromSource(contractPath, contractName, contractsDir string) (string, error) {
-	// Look for corresponding .sol file
-	contractDir := filepath.Dir(contractPath)
-	baseName := strings.TrimSuffix(filepath.Base(contractPath), filepath.Ext(contractPath))
-	solFile := filepath.Join(contractDir, baseName+".sol")
-
-	// Check if .sol file exists
-	if _, err := os.Stat(solFile); err != nil {
-		return "", fmt.Errorf("no corresponding .sol file found for %s", contractPath)
-	}
-
-	// Try to compile the Solidity file to extract ABI
-	// This is a simplified approach - in practice, you might want to use solc directly
-	tempDir := filepath.Join(contractsDir, "temp_compile")
-	if err := os.MkdirAll(tempDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create temp directory: %w", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	// Copy .sol file to temp directory
-	tempSolFile := filepath.Join(tempDir, filepath.Base(solFile))
-	solData, err := os.ReadFile(solFile)
+// getForgeABI gets ABI using forge inspect
+func getForgeABI(contractPath, contractName, contractsDir string) (string, error) {
+	cmd := exec.Command("forge", "inspect", contractPath, contractName, "abi")
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("failed to read .sol file: %w", err)
+		return "", fmt.Errorf("failed to get ABI with forge inspect: %w, output: %s", err, string(output))
 	}
 
-	if err := os.WriteFile(tempSolFile, solData, 0644); err != nil {
-		return "", fmt.Errorf("failed to write temp .sol file: %w", err)
+	var abiJSON interface{}
+	if err := json.Unmarshal(output, &abiJSON); err != nil {
+		return "", fmt.Errorf("invalid ABI JSON from forge inspect: %w", err)
 	}
 
-	// Try to compile using solc (if available)
-	cmd := exec.Command("solc", "--abi", "--bin", "--output-dir", tempDir, tempSolFile)
-	_, err = cmd.CombinedOutput()
-	if err != nil {
-		// If solc is not available, try to extract ABI from the source file directly
-		return extractABIFromSourceFile(solFile, contractName, contractsDir)
-	}
-
-	// Look for generated ABI file
-	abiFile := filepath.Join(tempDir, fmt.Sprintf("%s.abi", contractName))
-	if _, err := os.Stat(abiFile); err != nil {
-		// Try with lowercase name
-		abiFile = filepath.Join(tempDir, fmt.Sprintf("%s.abi", strings.ToLower(contractName)))
-		if _, err := os.Stat(abiFile); err != nil {
-			return "", fmt.Errorf("ABI file not found after compilation")
-		}
-	}
-
-	// Copy ABI to final location
 	finalAbiPath := filepath.Join(contractsDir, fmt.Sprintf("%s.abi.json", strings.ToLower(contractName)))
-	abiData, err := os.ReadFile(abiFile)
-	if err != nil {
-		return "", fmt.Errorf("failed to read generated ABI: %w", err)
-	}
-
-	if err := os.WriteFile(finalAbiPath, abiData, 0644); err != nil {
+	if err := os.WriteFile(finalAbiPath, output, 0644); err != nil {
 		return "", fmt.Errorf("failed to save ABI: %w", err)
 	}
 
 	return finalAbiPath, nil
-}
-
-// extractABIFromSourceFile tries to extract ABI information from Solidity source
-func extractABIFromSourceFile(solFile, contractName, contractsDir string) (string, error) {
-	// This is a very basic approach - in practice, you'd want to use a proper Solidity parser
-	// For now, we'll create a basic ABI based on common patterns
-
-	solData, err := os.ReadFile(solFile)
-	if err != nil {
-		return "", fmt.Errorf("failed to read .sol file: %w", err)
-	}
-
-	// Look for function signatures in the source
-	// This is a simplified approach - a real implementation would use a proper parser
-	content := string(solData)
-
-	// Check if this looks like a SimpleCoin contract
-	if strings.Contains(content, "function sendCoin") && strings.Contains(content, "function getBalance") {
-		// Create a basic ABI for SimpleCoin
-		simpleCoinABI := `[
-			{
-				"inputs": [],
-				"stateMutability": "nonpayable",
-				"type": "constructor"
-			},
-			{
-				"anonymous": false,
-				"inputs": [
-					{
-						"indexed": true,
-						"internalType": "address",
-						"name": "_from",
-						"type": "address"
-					},
-					{
-						"indexed": true,
-						"internalType": "address",
-						"name": "_to",
-						"type": "address"
-					},
-					{
-						"indexed": false,
-						"internalType": "uint256",
-						"name": "_value",
-						"type": "uint256"
-					}
-				],
-				"name": "Transfer",
-				"type": "event"
-			},
-			{
-				"inputs": [
-					{
-						"internalType": "address",
-						"name": "addr",
-						"type": "address"
-					}
-				],
-				"name": "getBalance",
-				"outputs": [
-					{
-						"internalType": "uint256",
-						"name": "",
-						"type": "uint256"
-					}
-				],
-				"stateMutability": "view",
-				"type": "function"
-			},
-			{
-				"inputs": [
-					{
-						"internalType": "address",
-						"name": "addr",
-						"type": "address"
-					}
-				],
-				"name": "getBalanceInEth",
-				"outputs": [
-					{
-						"internalType": "uint256",
-						"name": "",
-						"type": "uint256"
-					}
-				],
-				"stateMutability": "view",
-				"type": "function"
-			},
-			{
-				"inputs": [
-					{
-						"internalType": "address",
-						"name": "receiver",
-						"type": "address"
-					},
-					{
-						"internalType": "uint256",
-						"name": "amount",
-						"type": "uint256"
-					}
-				],
-				"name": "sendCoin",
-				"outputs": [
-					{
-						"internalType": "bool",
-						"name": "sufficient",
-						"type": "bool"
-					}
-				],
-				"stateMutability": "nonpayable",
-				"type": "function"
-			}
-		]`
-
-		finalAbiPath := filepath.Join(contractsDir, fmt.Sprintf("%s.abi.json", strings.ToLower(contractName)))
-		if err := os.WriteFile(finalAbiPath, []byte(simpleCoinABI), 0644); err != nil {
-			return "", fmt.Errorf("failed to save extracted ABI: %w", err)
-		}
-
-		return finalAbiPath, nil
-	}
-
-	return "", fmt.Errorf("unable to extract ABI from source file")
 }
 
 var ContractCmd = &cli.Command{
@@ -656,6 +459,108 @@ var ContractCmd = &cli.Command{
 			Action: deployFromGit,
 		},
 		{
+			Name:  "clone-config",
+			Usage: "Clone repositories listed in config/contracts.json",
+			Flags: []cli.Flag{
+				&cli.StringFlag{
+					Name:  "config",
+					Usage: "Path to contracts.json",
+					Value: "config/contracts.json",
+				},
+				&cli.StringFlag{
+					Name:  "workspace",
+					Usage: "Workspace directory to clone repositories into",
+					Value: "./workspace",
+				},
+			},
+			Action: func(c *cli.Context) error {
+				configPath := c.String("config")
+				workspace := c.String("workspace")
+
+				data, err := os.ReadFile(configPath)
+				if err != nil {
+					return fmt.Errorf("failed to read config file: %w", err)
+				}
+
+				var cfg struct {
+					Contracts []struct {
+						Name            string   `json:"name"`
+						ProjectType     string   `json:"project_type"`
+						GitURL          string   `json:"git_url"`
+						GitRef          string   `json:"git_ref"`
+						MainContract    string   `json:"main_contract"`
+						ContractPath    string   `json:"contract_path"`
+						ConstructorArgs []string `json:"constructor_args"`
+					} `json:"contracts"`
+				}
+
+				if err := json.Unmarshal(data, &cfg); err != nil {
+					return fmt.Errorf("failed to parse config file: %w", err)
+				}
+
+				manager := NewContractManager(workspace, "")
+
+				for _, cdef := range cfg.Contracts {
+					// Use the provided name as the clone directory name (sanitized)
+					name := strings.ToLower(cdef.Name)
+					name = strings.ReplaceAll(name, " ", "-")
+					project := &ContractProject{
+						Name:         cdef.Name,
+						GitURL:       cdef.GitURL,
+						GitRef:       cdef.GitRef,
+						ProjectType:  ProjectType(cdef.ProjectType),
+						MainContract: cdef.MainContract,
+						ContractPath: cdef.ContractPath,
+						CloneDir:     filepath.Join(name),
+						Env:          make(map[string]string),
+					}
+
+					fmt.Printf("Cloning %s into workspace...\n", project.GitURL)
+					if err := manager.CloneRepository(project); err != nil {
+						fmt.Printf("Warning: failed to clone %s: %v\n", project.GitURL, err)
+						continue
+					}
+					fmt.Printf("Cloned to: %s\n", project.CloneDir)
+				}
+
+				return nil
+			},
+		},
+		{
+			Name:  "deploy-local",
+			Usage: "Deploy contracts from local cloned repositories based on config/contracts.json (for air-gapped environments)",
+			Flags: []cli.Flag{
+				&cli.StringFlag{
+					Name:  "config",
+					Usage: "Path to contracts.json",
+					Value: "config/contracts.json",
+				},
+				&cli.StringFlag{
+					Name:  "workspace",
+					Usage: "Workspace directory containing cloned repositories",
+					Value: "./workspace",
+				},
+				&cli.StringFlag{
+					Name:  "rpc-url",
+					Usage: "RPC URL for deployment",
+					Value: "http://localhost:1234/rpc/v1",
+				},
+				&cli.BoolFlag{
+					Name:  "create-deployer",
+					Usage: "Create a new deployer account",
+				},
+				&cli.StringFlag{
+					Name:  "deployer-key",
+					Usage: "Private key for deployment (hex format, 0x prefix optional)",
+				},
+				&cli.BoolFlag{
+					Name:  "bindings",
+					Usage: "Generate Go bindings using abigen and save to disk",
+				},
+			},
+			Action: deployFromLocal,
+		},
+		{
 			Name:  "list",
 			Usage: "List deployed contracts",
 			Flags: []cli.Flag{
@@ -743,13 +648,126 @@ var ContractCmd = &cli.Command{
 	},
 }
 
-// deployFromGit deploys a contract from a git repository
+func deployFromLocal(c *cli.Context) error {
+	configPath := c.String("config")
+	workspace := c.String("workspace")
+	rpcURL := c.String("rpc-url")
+	createDeployer := c.Bool("create-deployer")
+	deployerKey := c.String("deployer-key")
+	generateBindings := c.Bool("bindings")
+
+	// Read config file
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	var cfg struct {
+		Contracts []struct {
+			Name            string   `json:"name"`
+			ProjectType     string   `json:"project_type"`
+			GitURL          string   `json:"git_url"`
+			GitRef          string   `json:"git_ref"`
+			MainContract    string   `json:"main_contract"`
+			ContractPath    string   `json:"contract_path"`
+			ConstructorArgs []string `json:"constructor_args"`
+		} `json:"contracts"`
+	}
+
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	// Create contract manager
+	manager := NewContractManager(workspace, rpcURL)
+
+	// Handle deployer account
+	if createDeployer {
+		fmt.Println("Creating new deployer account...")
+		privateKey, address, err := manager.CreateDeployerAccount()
+		if err != nil {
+			return fmt.Errorf("failed to create deployer account: %w", err)
+		}
+		fmt.Printf("Created deployer account: %s\n", address.String())
+		fmt.Printf("Private key: %s\n", privateKey)
+	} else if deployerKey != "" {
+		manager.SetDeployerKey(deployerKey)
+	} else {
+		return fmt.Errorf("either --create-deployer or --deployer-key must be provided")
+	}
+
+	// Deploy each contract from local clone
+	for _, cdef := range cfg.Contracts {
+		// Use the sanitized name as the clone directory name (same as clone-config)
+		name := strings.ToLower(cdef.Name)
+		name = strings.ReplaceAll(name, " ", "-")
+		localCloneDir := filepath.Join(workspace, name)
+
+		absLocalCloneDir, err := filepath.Abs(localCloneDir)
+		if err != nil {
+			fmt.Printf("Warning: failed to get absolute path for %s: %v, skipping %s\n", localCloneDir, err, cdef.Name)
+			continue
+		}
+
+		// Check if the local clone exists
+		if _, err := os.Stat(absLocalCloneDir); os.IsNotExist(err) {
+			fmt.Printf("Warning: local clone directory %s does not exist, skipping %s\n", absLocalCloneDir, cdef.Name)
+			continue
+		}
+
+		fmt.Printf("====== Deploying %s from local clone ======\n", cdef.Name)
+
+		// Create project configuration pointing to local clone
+		project := &ContractProject{
+			Name:         cdef.Name,
+			GitURL:       cdef.GitURL,
+			GitRef:       cdef.GitRef,
+			ProjectType:  ProjectType(cdef.ProjectType),
+			MainContract: cdef.MainContract,
+			ContractPath: cdef.ContractPath,
+			CloneDir:     absLocalCloneDir, // Use absolute path to existing local clone
+			Env:          make(map[string]string),
+		}
+
+		// Parse constructor arguments
+		var constructorArgs []string
+		if len(cdef.ConstructorArgs) > 0 {
+			constructorArgs = cdef.ConstructorArgs
+		}
+
+		// Deploy contract using forge create (reuses existing local clone)
+		contractPath := fmt.Sprintf("%s:%s", project.ContractPath, project.MainContract)
+		deployedContract, err := manager.DeployContract(project, contractPath, constructorArgs, generateBindings, false)
+
+		if err != nil {
+			fmt.Printf("Error: failed to deploy contract %s: %v\n", cdef.Name, err)
+			continue
+		}
+
+		// Display deployment results
+		fmt.Printf("\nContract %s deployed successfully!\n", cdef.Name)
+		fmt.Printf("Contract: %s\n", deployedContract.Name)
+		fmt.Printf("Address: %s\n", deployedContract.Address.String())
+		fmt.Printf("Transaction: %s\n", deployedContract.TransactionHash.String())
+		fmt.Printf("Deployer: %s\n", deployedContract.DeployerAddress.String())
+		if deployedContract.AbiPath != "" {
+			fmt.Printf("ABI Path: %s\n", deployedContract.AbiPath)
+		}
+		if deployedContract.BindingsPath != "" {
+			fmt.Printf("Go Bindings: %s\n", deployedContract.BindingsPath)
+		}
+		fmt.Printf("====== Finished %s ======\n\n", cdef.Name)
+	}
+
+	fmt.Println("All deployments completed. Check deployments with: ./mpool-tx contract list")
+	return nil
+}
+
 func deployFromGit(c *cli.Context) error {
 	if deployScript := c.String("deploy-script"); deployScript != "" {
 		return deployWithCustomScript(c)
 	}
 
-	// Check if using shell commands
 	if commands := c.String("commands"); commands != "" {
 		return deployWithShellCommands(c)
 	}
@@ -779,6 +797,7 @@ func deployFromGit(c *cli.Context) error {
 	// Create project configuration
 	projectType := ProjectType(c.String("project-type"))
 	project := &ContractProject{
+		Name:         c.String("main-contract"),
 		GitURL:       c.String("git-url"),
 		GitRef:       c.String("git-ref"),
 		ProjectType:  projectType,
@@ -847,7 +866,7 @@ func deployFromGit(c *cli.Context) error {
 	// Deploy contract using forge create
 	contractPath := fmt.Sprintf("%s:%s", project.ContractPath, project.MainContract)
 	generateBindings := c.Bool("bindings")
-	deployedContract, err := manager.DeployContract(project, contractPath, constructorArgs, generateBindings)
+	deployedContract, err := manager.DeployContract(project, contractPath, constructorArgs, generateBindings, true)
 
 	if err != nil {
 		return fmt.Errorf("failed to deploy contract: %w", err)
@@ -1068,7 +1087,7 @@ func callContractMethod(c *cli.Context) error {
 		return fmt.Errorf("number of arguments (%d) must match number of types (%d)", len(args), len(types))
 	}
 
-	wrapper, err := NewContractWrapper(rpcURL, contractAddress)
+	wrapper, err := config.NewContractWrapper(rpcURL, contractAddress)
 	if err != nil {
 		return fmt.Errorf("failed to create contract wrapper: %w", err)
 	}
@@ -1151,9 +1170,7 @@ func convertArgument(arg, argType string) (interface{}, error) {
 
 func parsePrivateKey(privateKeyStr string) (*ecdsa.PrivateKey, error) {
 	// Remove 0x prefix if present
-	if strings.HasPrefix(privateKeyStr, "0x") {
-		privateKeyStr = privateKeyStr[2:]
-	}
+	privateKeyStr = strings.TrimPrefix(privateKeyStr, "0x")
 
 	// Parse hex string
 	privateKeyBytes, err := hex.DecodeString(privateKeyStr)

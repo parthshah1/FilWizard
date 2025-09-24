@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -24,6 +23,7 @@ const (
 )
 
 type ContractProject struct {
+	Name         string            `json:"name"`
 	GitURL       string            `json:"git_url"`
 	GitRef       string            `json:"git_ref,omitempty"`
 	ProjectType  ProjectType       `json:"project_type"`
@@ -73,7 +73,13 @@ func (cm *ContractManager) CloneRepository(project *ContractProject) error {
 		return fmt.Errorf("failed to create workspace directory: %w", err)
 	}
 
-	project.CloneDir = filepath.Join(cm.workspaceDir, fmt.Sprintf("project_%d", time.Now().Unix()))
+	if project.CloneDir == "" {
+		project.CloneDir = filepath.Join(cm.workspaceDir, fmt.Sprintf("project_%d", time.Now().Unix()))
+	} else {
+		if !filepath.IsAbs(project.CloneDir) {
+			project.CloneDir = filepath.Join(cm.workspaceDir, project.CloneDir)
+		}
+	}
 
 	cmd := exec.Command("git", "clone", project.GitURL, project.CloneDir)
 	output, err := cmd.CombinedOutput()
@@ -131,6 +137,33 @@ func (cm *ContractManager) CompileHardhatProject(project *ContractProject) error
 	return nil
 }
 
+func (cm *ContractManager) CompileFoundryProject(project *ContractProject) error {
+	originalDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %w", err)
+	}
+	defer os.Chdir(originalDir)
+
+	if err := os.Chdir(project.CloneDir); err != nil {
+		return fmt.Errorf("failed to change to project directory: %w", err)
+	}
+
+	cmd := exec.Command("forge", "build")
+	if project.Env != nil {
+		cmd.Env = os.Environ()
+		for key, value := range project.Env {
+			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
+		}
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to compile with forge build: %w, output: %s", err, output)
+	}
+
+	return nil
+}
+
 func (cm *ContractManager) CreateDeployerAccount() (string, ethtypes.EthAddress, error) {
 	key, ethAddr, filAddr := NewAccount()
 
@@ -146,7 +179,7 @@ func (cm *ContractManager) CreateDeployerAccount() (string, ethtypes.EthAddress,
 	return privateKey, ethAddr, nil
 }
 
-func (cm *ContractManager) DeployContract(project *ContractProject, contractPath string, constructorArgs []string, generateBindings bool) (*DeployedContract, error) {
+func (cm *ContractManager) DeployContract(project *ContractProject, contractPath string, constructorArgs []string, generateBindings bool, cleanup bool) (*DeployedContract, error) {
 	if cm.deployerKey == "" {
 		return nil, fmt.Errorf("deployer key not set, create a deployer account first")
 	}
@@ -192,17 +225,20 @@ func (cm *ContractManager) DeployContract(project *ContractProject, contractPath
 		return nil, fmt.Errorf("failed to parse forge create output: %w", err)
 	}
 
-	// Extract artifacts before cleanup
-	if err := cm.extractArtifacts(project, deployedContract, generateBindings); err != nil {
-		fmt.Printf("Warning: failed to extract artifacts: %v\n", err)
+	if generateBindings {
+		if err := cm.extractArtifacts(project, deployedContract, generateBindings); err != nil {
+			fmt.Printf("Warning: failed to extract artifacts: %v\n", err)
+		}
 	}
 
 	if err := cm.saveDeployment(deployedContract); err != nil {
 		return nil, fmt.Errorf("failed to save deployment: %w", err)
 	}
 
-	if err := cm.CleanupProject(project); err != nil {
-		fmt.Printf("Warning: Failed to cleanup project directory: %v\n", err)
+	if cleanup {
+		if err := cm.CleanupProject(project); err != nil {
+			fmt.Printf("Warning: Failed to cleanup project directory: %v\n", err)
+		}
 	}
 
 	return deployedContract, nil
@@ -214,15 +250,13 @@ func (cm *ContractManager) extractArtifacts(project *ContractProject, contract *
 		return fmt.Errorf("failed to create contracts dir: %w", err)
 	}
 
-	// Extract ABI
-	abiPath, err := cm.extractABI(project, contract.Name)
+	abiPath, err := cm.extractABIWithForgeInspect(project, contract.Name)
 	if err != nil {
 		return fmt.Errorf("failed to extract ABI: %w", err)
 	}
 	contract.AbiPath = abiPath
 	fmt.Printf("Saved ABI for %s to %s\n", contract.Name, abiPath)
 
-	// Generate bindings if requested (using only ABI)
 	if generateBindings {
 		bindingsPath, err := cm.generateBindings(contract.Name, abiPath)
 		if err != nil {
@@ -235,124 +269,45 @@ func (cm *ContractManager) extractArtifacts(project *ContractProject, contract *
 	return nil
 }
 
-func (cm *ContractManager) extractABI(project *ContractProject, contractName string) (string, error) {
-	artifactDirs := []string{
-		filepath.Join(project.CloneDir, "out"),
-		filepath.Join(project.CloneDir, "artifacts"),
-		filepath.Join(project.CloneDir, "build"),
+func (cm *ContractManager) extractABIWithForgeInspect(project *ContractProject, contractName string) (string, error) {
+	originalDir, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current directory: %w", err)
+	}
+	defer os.Chdir(originalDir)
+
+	if err := os.Chdir(project.CloneDir); err != nil {
+		return "", fmt.Errorf("failed to change to project directory: %w", err)
 	}
 
-	for _, dir := range artifactDirs {
-		if _, err := os.Stat(dir); err != nil {
-			continue
-		}
+	// Use forge inspect to extract ABI directly from source
+	contractPath := fmt.Sprintf("%s:%s", project.ContractPath, project.MainContract)
+	cmd := exec.Command("forge", "inspect", contractPath, "abi", "--json")
 
-		var abiData []byte
-		err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-			if err != nil || d.IsDir() || filepath.Ext(path) != ".json" {
-				return nil
-			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return nil
-			}
-
-			var parsed map[string]interface{}
-			if err := json.Unmarshal(data, &parsed); err != nil {
-				return nil
-			}
-
-			if !cm.isTargetContract(path, parsed, contractName) {
-				return nil
-			}
-
-			if abiVal, ok := parsed["abi"]; ok {
-				fmt.Printf("Found ABI for contract '%s' in file: %s\n", contractName, path)
-				abiData, _ = json.Marshal(abiVal)
-				return errors.New("found")
-			}
-
-			return nil
-		})
-
-		if err != nil && err.Error() == "found" && len(abiData) > 0 {
-			abiPath := filepath.Join(cm.workspaceDir, "contracts", fmt.Sprintf("%s.abi.json", strings.ToLower(contractName)))
-			return abiPath, os.WriteFile(abiPath, abiData, 0644)
+	if project.Env != nil {
+		cmd.Env = os.Environ()
+		for key, value := range project.Env {
+			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
 		}
 	}
 
-	return "", fmt.Errorf("ABI not found for contract %s", contractName)
-}
-
-func (cm *ContractManager) extractBytecode(project *ContractProject, contractName string) (string, error) {
-	artifactDirs := []string{
-		filepath.Join(project.CloneDir, "out"),
-		filepath.Join(project.CloneDir, "artifacts"),
-		filepath.Join(project.CloneDir, "build"),
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to extract ABI with forge inspect: %w", err)
 	}
 
-	for _, dir := range artifactDirs {
-		if _, err := os.Stat(dir); err != nil {
-			continue
-		}
-
-		var bytecodeData []byte
-		err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-			if err != nil || d.IsDir() || filepath.Ext(path) != ".json" {
-				return nil
-			}
-
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return nil
-			}
-
-			var parsed map[string]interface{}
-			if err := json.Unmarshal(data, &parsed); err != nil {
-				return nil
-			}
-
-			if !cm.isTargetContract(path, parsed, contractName) {
-				return nil
-			}
-
-			bytecodeFields := []string{"bytecode", "bin", "binary", "deployedBytecode"}
-			for _, field := range bytecodeFields {
-				if bytecodeVal, ok := parsed[field]; ok {
-					if bytecodeStr, ok := bytecodeVal.(string); ok && bytecodeStr != "" && bytecodeStr != "0x" {
-						fmt.Printf("Found bytecode for contract '%s' in field '%s' from file: %s\n", contractName, field, path)
-						bytecodeData = []byte(bytecodeStr)
-						return errors.New("found")
-					}
-				}
-			}
-
-			return nil
-		})
-
-		if err != nil && err.Error() == "found" && len(bytecodeData) > 0 {
-			bytecodePath := filepath.Join(cm.workspaceDir, "contracts", fmt.Sprintf("%s.bin", strings.ToLower(contractName)))
-			return bytecodePath, os.WriteFile(bytecodePath, bytecodeData, 0644)
-		}
+	var abiJSON interface{}
+	if err := json.Unmarshal(output, &abiJSON); err != nil {
+		return "", fmt.Errorf("invalid ABI JSON from forge inspect (output was: %s): %w", string(output), err)
 	}
 
-	return "", fmt.Errorf("bytecode not found for contract %s", contractName)
-}
-
-func (cm *ContractManager) isTargetContract(filePath string, parsed map[string]interface{}, contractName string) bool {
-	baseName := strings.TrimSuffix(filepath.Base(filePath), ".json")
-
-	if strings.EqualFold(baseName, contractName) {
-		return true
+	abiPath := filepath.Join(cm.workspaceDir, "contracts", fmt.Sprintf("%s.abi.json", strings.ToLower(contractName)))
+	if err := os.WriteFile(abiPath, output, 0644); err != nil {
+		return "", fmt.Errorf("failed to save ABI file: %w", err)
 	}
 
-	if v, ok := parsed["contractName"]; ok {
-		if nameStr, ok := v.(string); ok && strings.EqualFold(nameStr, contractName) {
-			return true
-		}
-	}
-
-	return false
+	fmt.Printf("Extracted ABI using forge inspect for %s\n", contractName)
+	return abiPath, nil
 }
 
 func (cm *ContractManager) generateBindings(contractName, abiPath string) (string, error) {
@@ -408,7 +363,7 @@ func (cm *ContractManager) parseForgeCreateOutput(output string, project *Contra
 	}
 
 	return &DeployedContract{
-		Name:               project.MainContract,
+		Name:               project.Name,
 		Address:            ethAddr,
 		DeployerAddress:    deployerAddr,
 		DeployerPrivateKey: cm.deployerKey,

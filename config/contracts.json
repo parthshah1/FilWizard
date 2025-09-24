@@ -1,0 +1,22 @@
+{
+  "contracts": [
+    {
+      "name": "SimpleCoin",
+      "project_type": "foundry",
+      "git_url": "https://github.com/parthshah1/fevm-kit.git",
+      "git_ref": "main",
+      "contract_path": "contracts/basic-solidity-examples/SimpleCoin.sol",
+      "main_contract": "SimpleCoin",
+      "constructor_args": ["1000"]
+    },
+    {
+        "name": "PDP",
+        "project_type": "foundry",
+        "git_url": "https://github.com/FilOzone/pdp.git",
+        "git_ref": "main",
+        "contract_path": "src/PDPVerifier.sol",
+        "main_contract": "PDPVerifier",
+        "constructor_args": []
+    }
+  ]
+}
