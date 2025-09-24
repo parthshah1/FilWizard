@@ -1134,6 +1134,11 @@ func parsePrivateKey(privateKeyStr string) (*ecdsa.PrivateKey, error) {
 		return nil, fmt.Errorf("invalid hex format: %w", err)
 	}
 
+	// Validate key length (32 bytes for secp256k1)
+	if len(privateKeyBytes) != 32 {
+		return nil, fmt.Errorf("invalid private key length: got %d bytes, want 32 bytes (secp256k1)", len(privateKeyBytes))
+	}
+	// Create private key
 	privateKey, err := crypto.ToECDSA(privateKeyBytes)
 	if err != nil {
 		return nil, fmt.Errorf("invalid private key: %w", err)
