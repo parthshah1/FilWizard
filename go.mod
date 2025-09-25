@@ -14,7 +14,7 @@ require (
 )
 
 require (
-	github.com/GeertJohzan/go.incremental v1.0.0 // indirect
+	github.com/GeertJohan/go.incremental v1.0.0 // indirect
 	github.com/GeertJohan/go.rice v1.0.3 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/StackExchange/wmi v1.2.1 // indirect
