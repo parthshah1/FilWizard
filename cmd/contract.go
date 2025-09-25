@@ -868,6 +868,7 @@ func listDeployments(c *cli.Context) error {
 		fmt.Printf("   TX Hash: %s\n", deployment.TransactionHash.String())
 		fmt.Printf("   Deployer: %s\n", deployment.DeployerAddress.String())
 		fmt.Printf("   Deployer Key: %s\n", deployment.DeployerPrivateKey)
+		fmt.Printf("   Go binding generation: %v\n", deployment.BindingsPath != "")
 		if deployment.AbiPath != "" {
 			fmt.Printf("   ABI Path: %s\n", deployment.AbiPath)
 		}

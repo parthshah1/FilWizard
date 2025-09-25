@@ -3,6 +3,7 @@ module github.com/parthshah1/mpool-tx
 go 1.24.3
 
 require (
+	github.com/antithesishq/antithesis-sdk-go v0.5.0
 	github.com/ethereum/go-ethereum v1.16.3
 	github.com/filecoin-project/go-address v1.2.0
 	github.com/filecoin-project/go-state-types v0.17.0-dev2
@@ -13,7 +14,7 @@ require (
 )
 
 require (
-	github.com/GeertJohan/go.incremental v1.0.0 // indirect
+	github.com/GeertJohzan/go.incremental v1.0.0 // indirect
 	github.com/GeertJohan/go.rice v1.0.3 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/StackExchange/wmi v1.2.1 // indirect
@@ -48,7 +49,6 @@ require (
 	github.com/filecoin-project/specs-actors/v5 v5.0.6 // indirect
 	github.com/filecoin-project/specs-actors/v6 v6.0.2 // indirect
 	github.com/filecoin-project/specs-actors/v7 v7.0.1 // indirect
-	github.com/fsnotify/fsnotify v1.6.0 // indirect
 	github.com/gbrlsnchs/jwt/v3 v3.0.1 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect

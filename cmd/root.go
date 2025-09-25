@@ -4,14 +4,13 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/parthshah1/mpool-tx/client"
 	"github.com/parthshah1/mpool-tx/config"
 	"github.com/urfave/cli/v2"
 )
 
 var (
 	cfg     *config.Config
-	clientt *client.Client
+	clientt *config.Client
 )
 
 // NewApp creates a new CLI app
@@ -31,16 +30,19 @@ func NewApp() *cli.App {
 				EnvVars: []string{"FILECOIN_TOKEN"},
 			},
 			&cli.BoolFlag{
+				Name:    "antithesis",
+				Usage:   "Enable Antithesis property assertions (env: ANTITHESIS_MODE)",
+				EnvVars: []string{"ANTITHESIS_MODE"},
+			},
+			&cli.BoolFlag{
 				Name:    "verbose",
 				Usage:   "Verbose output (env: VERBOSE)",
 				EnvVars: []string{"VERBOSE"},
 			},
 		},
 		Before: func(c *cli.Context) error {
-			// Load configuration
 			cfg = config.Load()
 
-			// Override with CLI flags if provided
 			if c.IsSet("rpc") {
 				cfg.RPC = c.String("rpc")
 			}
@@ -51,9 +53,15 @@ func NewApp() *cli.App {
 				cfg.Verbose = c.Bool("verbose")
 			}
 
+			// Set global antithesis mode
+			config.SetAntithesisMode(c.Bool("antithesis"))
+			if config.IsAntithesisEnabled() {
+				fmt.Println("Antithesis property assertions enabled")
+			}
+
 			// Initialize client
 			var err error
-			clientt, err = client.New(cfg)
+			clientt, err = config.New(cfg)
 			if err != nil {
 				return fmt.Errorf("failed to connect to Filecoin node: %w", err)
 			}
@@ -70,6 +78,7 @@ func NewApp() *cli.App {
 			WalletCmd,
 			MempoolCmd,
 			ContractCmd,
+			PropertiesCmd,
 		},
 	}
 	return app
