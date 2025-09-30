@@ -246,7 +246,7 @@ func convertArgument(arg, argType string) (interface{}, error) {
 	case "uint256", "uint":
 		value, ok := new(big.Int).SetString(arg, 0)
 		if !ok {
-			return nil, fmt.Errorf("invalid uint256 value: %s", arg)
+			return nil, fmt.Errorf("invalid uint value: %s", arg)
 		}
 		return value, nil
 	case "bool":
