@@ -161,7 +161,7 @@ func (cm *ContractManager) CompileFoundryProject(project *ContractProject) error
 	}
 
 	if err := os.Chdir(workingDir); err != nil {
-		return fmt.Errorf("failed to change to project directory: %w", workingDir, err)
+		return fmt.Errorf("failed to change to project directory %s: %w", workingDir, err)
 	}
 
 	cmd := exec.Command("forge", "build")
