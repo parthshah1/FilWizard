@@ -1,10 +1,10 @@
-# mpool-tx
+# FilWizard
 
 A comprehensive Filecoin testing tool designed for contract developers, ecosystem teams, and implementation teams to test, deploy, and interact with smart contracts on Filecoin networks. Specifically optimized for deterministic testing on platforms like Antithesis.
 
 ## Overview
 
-`mpool-tx` is a command-line tool that provides extensive capabilities for:
+`FilWizard` is a command-line tool that provides extensive capabilities for:
 - **Wallet Management**: Create and manage Filecoin and Ethereum wallets
 - **Transaction Testing**: Send individual transactions or spam the mempool with high-volume transaction loads
 - **Smart Contract Operations**: Deploy, call, and manage smart contracts (both Foundry and Hardhat projects)
@@ -32,18 +32,18 @@ This tool is particularly useful for testing Filecoin implementations in control
 
 ```bash
 # Clone the repository
-git clone https://github.com/parthshah1/mpool-tx.git
-cd mpool-tx
+git clone https://github.com/parthshah1/FilWizard.git
+cd FilWizard
 
 # Build the binary
 make build
 
-# The binary will be available as ./mpool-tx
+# The binary will be available as ./FilWizard
 ```
 
 ### Prerequisites
 
-Before using `mpool-tx`, ensure you have the following installed:
+Before using `FilWizard`, ensure you have the following installed:
 
 - **Go 1.24.3+**: Required for building the tool
 - **Foundry** (optional): Required for deploying Foundry-based contracts
@@ -60,7 +60,7 @@ Before using `mpool-tx`, ensure you have the following installed:
 
 ## Configuration
 
-`mpool-tx` can be configured through environment variables or command-line flags:
+`FilWizard` can be configured through environment variables or command-line flags:
 
 ### Environment Variables
 
@@ -90,16 +90,16 @@ Create new wallets with optional funding:
 
 ```bash
 # Create a single Filecoin wallet
-mpool-tx wallet create
+FilWizard wallet create
 
 # Create multiple Ethereum wallets with private keys shown
-mpool-tx wallet create --count 10 --type ethereum --show-private-key
+FilWizard wallet create --count 10 --type ethereum --show-private-key
 
 # Create and fund wallets
-mpool-tx wallet create --count 5 --type ethereum --fund 100
+FilWizard wallet create --count 5 --type ethereum --fund 100
 
 # Create BLS wallet
-mpool-tx wallet create --type filecoin --key-type bls
+FilWizard wallet create --type filecoin --key-type bls
 ```
 
 **Options:**
@@ -114,7 +114,7 @@ mpool-tx wallet create --type filecoin --key-type bls
 Display all wallets with their balances:
 
 ```bash
-mpool-tx wallet list
+FilWizard wallet list
 ```
 
 #### Fund a Wallet
@@ -122,10 +122,10 @@ mpool-tx wallet list
 Send FIL to a specific wallet:
 
 ```bash
-mpool-tx wallet fund <address> <amount>
+FilWizard wallet fund <address> <amount>
 
 # Example
-mpool-tx wallet fund f410fx... 50
+FilWizard wallet fund f410fx... 50
 ```
 
 #### Check Balance
@@ -133,10 +133,10 @@ mpool-tx wallet fund f410fx... 50
 Get the balance of a specific wallet:
 
 ```bash
-mpool-tx wallet balance <address>
+FilWizard wallet balance <address>
 
 # Example
-mpool-tx wallet balance f410fx...
+FilWizard wallet balance f410fx...
 ```
 
 ### Mempool Operations
@@ -146,13 +146,13 @@ Test transaction throughput and mempool behavior under various conditions.
 #### Send a Single Transaction
 
 ```bash
-mpool-tx mempool send <from> <to> <amount>
+FilWizard mempool send <from> <to> <amount>
 
 # Wait for confirmation
-mpool-tx mempool send <from> <to> <amount> --wait
+FilWizard mempool send <from> <to> <amount> --wait
 
 # Example
-mpool-tx mempool send f410fx... f410fy... 1.5 --wait
+FilWizard mempool send f410fx... f410fy... 1.5 --wait
 ```
 
 #### Spam Transactions
@@ -161,10 +161,10 @@ Generate high-volume transaction load for stress testing:
 
 ```bash
 # Send 1000 transactions with default settings
-mpool-tx mempool spam --count 1000
+FilWizard mempool spam --count 1000
 
 # Advanced spam with custom parameters
-mpool-tx mempool spam \
+FilWizard mempool spam \
   --count 5000 \
   --amount 0.1 \
   --concurrent 10 \
@@ -181,14 +181,14 @@ mpool-tx mempool spam \
 - `--refill-amount <fil>`: Amount to refill wallets in FIL (default: "10")
 - `--wait`: Wait for transaction confirmations
 
-**Note:** The spam command requires at least 2 wallets. Create wallets first using `mpool-tx wallet create`.
+**Note:** The spam command requires at least 2 wallets. Create wallets first using `FilWizard wallet create`.
 
 #### Send EIP-1559 Ethereum Transaction
 
 Send Ethereum-style transactions with custom gas parameters:
 
 ```bash
-mpool-tx mempool eth \
+FilWizard mempool eth \
   --from <address> \
   --to <address> \
   --value 1.0 \
@@ -214,7 +214,7 @@ mpool-tx mempool eth \
 Get current mempool statistics:
 
 ```bash
-mpool-tx mempool status
+FilWizard mempool status
 ```
 
 ### Contract Operations
@@ -226,7 +226,7 @@ Comprehensive smart contract deployment and interaction capabilities.
 Deploy a pre-compiled contract from a hex file:
 
 ```bash
-mpool-tx contract deploy <contract-file.hex> \
+FilWizard contract deploy <contract-file.hex> \
   --contract-name MyContract \
   --deployer <address> \
   --fund 10 \
@@ -249,7 +249,7 @@ Clone and deploy contracts directly from Git repositories (supports both Foundry
 
 ```bash
 # Deploy a Foundry contract
-mpool-tx contract from-git \
+FilWizard contract from-git \
   --git-url https://github.com/username/project.git \
   --git-ref main \
   --project-type foundry \
@@ -260,7 +260,7 @@ mpool-tx contract from-git \
   --bindings
 
 # Deploy with custom deployment script
-mpool-tx contract from-git \
+FilWizard contract from-git \
   --git-url https://github.com/username/hardhat-project.git \
   --project-type hardhat \
   --deploy-script scripts/deploy.sh \
@@ -291,7 +291,7 @@ For air-gapped or batch deployment scenarios, use the configuration-based workfl
 **Step 1: Clone repositories**
 
 ```bash
-mpool-tx contract clone-config \
+FilWizard contract clone-config \
   --config config/contracts.json \
   --workspace ./workspace
 ```
@@ -299,7 +299,7 @@ mpool-tx contract clone-config \
 **Step 2: Deploy from local clones**
 
 ```bash
-mpool-tx contract deploy-local \
+FilWizard contract deploy-local \
   --config config/contracts.json \
   --workspace ./workspace \
   --rpc-url http://localhost:1234/rpc/v1 \
@@ -340,7 +340,7 @@ Interact with deployed contracts:
 
 ```bash
 # Read-only call (view/pure functions)
-mpool-tx contract call \
+FilWizard contract call \
   --contract 0x1234... \
   --method balanceOf \
   --args "0xabcd..." \
@@ -348,7 +348,7 @@ mpool-tx contract call \
   --rpc-url http://localhost:1234/rpc/v1
 
 # State-changing transaction
-mpool-tx contract call \
+FilWizard contract call \
   --contract 0x1234... \
   --method transfer \
   --args "0xabcd...,100" \
@@ -370,10 +370,10 @@ mpool-tx contract call \
 
 #### List Deployed Contracts
 
-View all contracts deployed through mpool-tx:
+View all contracts deployed through FilWizard:
 
 ```bash
-mpool-tx contract list --workspace ./workspace
+FilWizard contract list --workspace ./workspace
 ```
 
 #### Get Contract Information
@@ -381,7 +381,7 @@ mpool-tx contract list --workspace ./workspace
 Get detailed information about a deployed contract:
 
 ```bash
-mpool-tx contract info <contract-name> --workspace ./workspace
+FilWizard contract info <contract-name> --workspace ./workspace
 ```
 
 #### Cleanup
@@ -389,7 +389,7 @@ mpool-tx contract info <contract-name> --workspace ./workspace
 Remove temporary project directories:
 
 ```bash
-mpool-tx contract cleanup --workspace ./workspace
+FilWizard contract cleanup --workspace ./workspace
 ```
 
 ## Examples
@@ -400,14 +400,14 @@ Here's a complete example workflow for testing a DApp on Filecoin:
 
 ```bash
 # 1. Create test wallets
-mpool-tx --rpc http://localhost:1234/rpc/v1 wallet create \
+FilWizard --rpc http://localhost:1234/rpc/v1 wallet create \
   --count 10 \
   --type ethereum \
   --fund 100 \
   --show-private-key
 
 # 2. Deploy a contract from Git
-mpool-tx contract from-git \
+FilWizard contract from-git \
   --git-url https://github.com/parthshah1/fevm-kit.git \
   --git-ref main \
   --project-type foundry \
@@ -419,16 +419,16 @@ mpool-tx contract from-git \
   --workspace ./workspace
 
 # 3. Get the deployed contract address
-mpool-tx contract list --workspace ./workspace
+FilWizard contract list --workspace ./workspace
 
 # 4. Call a contract method
-mpool-tx contract call \
+FilWizard contract call \
   --contract 0x... \
   --method totalSupply \
   --rpc-url http://localhost:1234/rpc/v1
 
 # 5. Send transactions to interact with the contract
-mpool-tx contract call \
+FilWizard contract call \
   --contract 0x... \
   --method transfer \
   --args "0xrecipient...,1000" \
@@ -438,7 +438,7 @@ mpool-tx contract call \
   --gas-limit 100000
 
 # 6. Stress test the network
-mpool-tx mempool spam \
+FilWizard mempool spam \
   --count 10000 \
   --amount 0.01 \
   --concurrent 20
@@ -450,7 +450,7 @@ For deploying multiple contracts in sequence:
 
 ```bash
 # Create a deployer account once
-mpool-tx contract from-git \
+FilWizard contract from-git \
   --git-url https://github.com/project1/contracts.git \
   --create-deployer \
   --main-contract Token \
@@ -458,7 +458,7 @@ mpool-tx contract from-git \
 
 # Use the same deployer for subsequent deployments
 # (The deployer key will be in workspace/deployments.json)
-mpool-tx contract from-git \
+FilWizard contract from-git \
   --git-url https://github.com/project2/contracts.git \
   --deployer-key 0x... \
   --main-contract NFT \
@@ -470,8 +470,8 @@ mpool-tx contract from-git \
 For reproducible testing environments, use the configuration-based approach:
 
 1. Create `config/contracts.json` with your contracts
-2. Clone all repositories: `mpool-tx contract clone-config`
-3. Deploy all contracts: `mpool-tx contract deploy-local --create-deployer`
+2. Clone all repositories: `FilWizard contract clone-config`
+3. Deploy all contracts: `FilWizard contract deploy-local --create-deployer`
 
 This approach is ideal for:
 - **Air-gapped environments** where internet access is restricted
@@ -480,11 +480,11 @@ This approach is ideal for:
 
 ## Testing on Antithesis
 
-`mpool-tx` is specifically designed to work in deterministic testing environments like Antithesis. Here's how to use it effectively:
+`FilWizard` is specifically designed to work in deterministic testing environments like Antithesis. Here's how to use it effectively:
 
 ### Antithesis Integration
 
-Antithesis provides deterministic replay capabilities for finding and reproducing bugs. When using `mpool-tx` in Antithesis:
+Antithesis provides deterministic replay capabilities for finding and reproducing bugs. When using `FilWizard` in Antithesis:
 
 1. **Deterministic Wallet Creation**: Use seeded wallet creation to ensure reproducible addresses
 2. **Configuration-Based Deployment**: Use the `config/contracts.json` approach to ensure consistent contract deployments
@@ -498,20 +498,20 @@ Antithesis provides deterministic replay capabilities for finding and reproducin
 export FILECOIN_RPC=http://filecoin-node:1234/rpc/v1
 
 # Create predictable wallets
-mpool-tx wallet create --count 20 --type ethereum --fund 1000
+FilWizard wallet create --count 20 --type ethereum --fund 1000
 
 # Deploy test contracts from configuration
-mpool-tx contract clone-config --workspace /test-workspace
-mpool-tx contract deploy-local \
+FilWizard contract clone-config --workspace /test-workspace
+FilWizard contract deploy-local \
   --workspace /test-workspace \
   --create-deployer
 
 # Execute test scenario
-mpool-tx mempool spam --count 10000 --concurrent 50
+FilWizard mempool spam --count 10000 --concurrent 50
 
 # Verify contract state
-for contract in $(mpool-tx contract list --workspace /test-workspace); do
-  mpool-tx contract call --contract $contract --method verify
+for contract in $(FilWizard contract list --workspace /test-workspace); do
+  FilWizard contract call --contract $contract --method verify
 done
 ```
 
@@ -528,7 +528,7 @@ done
 ### Project Structure
 
 ```
-mpool-tx/
+FilWizard/
 ├── cmd/                    # Command implementations
 │   ├── root.go            # Root command and CLI setup
 │   ├── wallet.go          # Wallet operations
@@ -585,7 +585,7 @@ Contributions are welcome! Please ensure your changes:
 
 ## Support
 
-For issues, questions, or contributions, please visit the [GitHub repository](https://github.com/parthshah1/mpool-tx).
+For issues, questions, or contributions, please visit the [GitHub repository](https://github.com/parthshah1/FilWizard).
 
 ---
 
