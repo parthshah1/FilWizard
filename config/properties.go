@@ -255,9 +255,8 @@ func (pc *PropertyChecker) streamNodeUpdates(ctx context.Context, client *Client
 			currentHeight := currentHead.Height()
 
 			if currentHeight > lastReportedHeight {
-				heightDiff := currentHeight - lastReportedHeight
 				fmt.Printf("Node %s advanced %d epochs: %d → %d\n",
-					nodeID, heightDiff, lastReportedHeight, currentHeight)
+					nodeID, currentHeight - lastReportedHeight, lastReportedHeight, currentHeight)
 				lastReportedHeight = currentHeight
 			}
 		}
