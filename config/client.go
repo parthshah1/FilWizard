@@ -1,4 +1,4 @@
-package client
+package config
 
 import (
 	"context"
@@ -7,18 +7,17 @@ import (
 
 	"github.com/filecoin-project/lotus/api"
 	"github.com/filecoin-project/lotus/api/client"
-	"github.com/parthshah1/mpool-tx/config"
 )
 
 // Client wraps the Filecoin API client
 type Client struct {
 	api    api.FullNode
-	cfg    *config.Config
+	cfg    *Config
 	closer func()
 }
 
 // New creates a new client instance
-func New(cfg *config.Config) (*Client, error) {
+func New(cfg *Config) (*Client, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config cannot be nil")
 	}
@@ -51,7 +50,7 @@ func (c *Client) Close() {
 }
 
 // GetConfig returns the client configuration
-func (c *Client) GetConfig() *config.Config {
+func (c *Client) GetConfig() *Config {
 	return c.cfg
 }
 

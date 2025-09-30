@@ -59,13 +59,17 @@ func NewContractManager(workspaceDir, rpcURL string) *ContractManager {
 
 	return &ContractManager{
 		workspaceDir:    absWorkspaceDir,
-		deploymentsFile: filepath.Join(contractsDir, "deployments.json"),
+		deploymentsFile: filepath.Join(absWorkspaceDir, "deployments.json"),
 		rpcURL:          rpcURL,
 	}
 }
 
 func (cm *ContractManager) SetDeployerKey(privateKey string) {
 	cm.deployerKey = privateKey
+}
+
+func (cm *ContractManager) GetDeployerKey() string {
+	return cm.deployerKey
 }
 
 func (cm *ContractManager) CloneRepository(project *ContractProject) error {
@@ -144,8 +148,20 @@ func (cm *ContractManager) CompileFoundryProject(project *ContractProject) error
 	}
 	defer os.Chdir(originalDir)
 
-	if err := os.Chdir(project.CloneDir); err != nil {
-		return fmt.Errorf("failed to change to project directory: %w", err)
+	workingDir := project.CloneDir
+
+	if strings.HasPrefix(project.ContractPath, "service_contracts/") {
+		parts := strings.Split(project.ContractPath, "/")
+		if len(parts) > 1 {
+			subDir := filepath.Join(project.CloneDir, parts[0])
+			if info, err := os.Stat(subDir); err == nil && info.IsDir() {
+				workingDir = subDir
+			}
+		}
+	}
+
+	if err := os.Chdir(workingDir); err != nil {
+		return fmt.Errorf("failed to change to project directory %s: %w", workingDir, err)
 	}
 
 	cmd := exec.Command("forge", "build")
@@ -190,16 +206,35 @@ func (cm *ContractManager) DeployContract(project *ContractProject, contractPath
 	}
 	defer os.Chdir(originalDir)
 
-	if err := os.Chdir(project.CloneDir); err != nil {
-		return nil, fmt.Errorf("failed to change to project directory: %w", err)
+	workingDir := project.CloneDir
+	contractFile := contractPath
+
+	if strings.HasPrefix(contractPath, "service_contracts/") {
+		parts := strings.Split(contractPath, "/")
+		if len(parts) > 1 {
+			subDir := filepath.Join(project.CloneDir, parts[0])
+			if info, err := os.Stat(subDir); err == nil && info.IsDir() {
+				workingDir = subDir
+				contractFile = strings.Join(parts[1:], "/")
+			}
+		}
 	}
+
+	if err := os.Chdir(workingDir); err != nil {
+		return nil, fmt.Errorf("failed to change to project directory %s: %w", workingDir, err)
+	}
+
+	fmt.Printf("Running forge create from directory: %s\n", workingDir)
+	fmt.Printf("Contract path: %s\n", contractFile)
 
 	args := []string{
 		"create",
 		"--rpc-url", cm.rpcURL,
 		"--private-key", cm.deployerKey,
 		"--broadcast",
-		contractPath,
+		"--optimizer-runs", "200",
+		"--via-ir",
+		contractFile,
 	}
 
 	if len(constructorArgs) > 0 {
@@ -276,12 +311,26 @@ func (cm *ContractManager) extractABIWithForgeInspect(project *ContractProject, 
 	}
 	defer os.Chdir(originalDir)
 
-	if err := os.Chdir(project.CloneDir); err != nil {
+	workingDir := project.CloneDir
+	contractFile := project.ContractPath
+
+	if strings.HasPrefix(project.ContractPath, "service_contracts/") {
+		parts := strings.Split(project.ContractPath, "/")
+		if len(parts) > 1 {
+			subDir := filepath.Join(project.CloneDir, parts[0])
+			if info, err := os.Stat(subDir); err == nil && info.IsDir() {
+				workingDir = subDir
+				contractFile = strings.Join(parts[1:], "/")
+			}
+		}
+	}
+
+	if err := os.Chdir(workingDir); err != nil {
 		return "", fmt.Errorf("failed to change to project directory: %w", err)
 	}
 
 	// Use forge inspect to extract ABI directly from source
-	contractPath := fmt.Sprintf("%s:%s", project.ContractPath, project.MainContract)
+	contractPath := fmt.Sprintf("%s:%s", contractFile, project.MainContract)
 	cmd := exec.Command("forge", "inspect", contractPath, "abi", "--json")
 
 	if project.Env != nil {

@@ -646,26 +646,30 @@ func deployFromLocal(c *cli.Context) error {
 	deployerKey := c.String("deployer-key")
 	generateBindings := c.Bool("bindings")
 
-	data, err := os.ReadFile(configPath)
+	contractsConfig, err := config.LoadContractsConfig(configPath)
 	if err != nil {
-		return fmt.Errorf("failed to read config file: %w", err)
+		return fmt.Errorf("failed to load contracts config: %w", err)
 	}
 
-	var cfg struct {
-		Contracts []struct {
-			Name            string   `json:"name"`
-			ProjectType     string   `json:"project_type"`
-			GitURL          string   `json:"git_url"`
-			GitRef          string   `json:"git_ref"`
-			MainContract    string   `json:"main_contract"`
-			ContractPath    string   `json:"contract_path"`
-			ConstructorArgs []string `json:"constructor_args"`
-		} `json:"contracts"`
+	deploymentsPath := filepath.Join(workspace, "deployments.json")
+	deployments, err := config.LoadDeploymentRecords(deploymentsPath)
+	if err != nil {
+		return fmt.Errorf("failed to load deployment records: %w", err)
 	}
 
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return fmt.Errorf("failed to parse config file: %w", err)
+	orderedContracts, err := config.GetDeploymentOrder(contractsConfig.Contracts)
+	if err != nil {
+		return fmt.Errorf("failed to determine deployment order: %w", err)
 	}
+
+	fmt.Printf("Deployment order: ")
+	for i, contract := range orderedContracts {
+		if i > 0 {
+			fmt.Print(" -> ")
+		}
+		fmt.Print(contract.Name)
+	}
+	fmt.Println()
 
 	manager := NewContractManager(workspace, rpcURL)
 	if createDeployer {
@@ -682,7 +686,7 @@ func deployFromLocal(c *cli.Context) error {
 		return fmt.Errorf("either --create-deployer or --deployer-key must be provided")
 	}
 
-	for _, cdef := range cfg.Contracts {
+	for _, cdef := range orderedContracts {
 		name := strings.ToLower(cdef.Name)
 		name = strings.ReplaceAll(name, " ", "-")
 		localCloneDir := filepath.Join(workspace, name)
@@ -700,6 +704,20 @@ func deployFromLocal(c *cli.Context) error {
 
 		fmt.Printf("====== Deploying %s from local clone ======\n", cdef.Name)
 
+		deployments, err = config.LoadDeploymentRecords(deploymentsPath)
+		if err != nil {
+			return fmt.Errorf("failed to reload deployment records before resolving dependencies for %s: %w", cdef.Name, err)
+		}
+
+		resolvedArgs, err := config.ResolveDependencies(cdef, deployments)
+		if err != nil {
+			return fmt.Errorf("failed to resolve dependencies for %s: %w", cdef.Name, err)
+		}
+
+		if len(resolvedArgs) > 0 {
+			fmt.Printf("Constructor args: %v\n", resolvedArgs)
+		}
+
 		project := &ContractProject{
 			Name:         cdef.Name,
 			GitURL:       cdef.GitURL,
@@ -710,17 +728,18 @@ func deployFromLocal(c *cli.Context) error {
 			CloneDir:     absLocalCloneDir,
 			Env:          make(map[string]string),
 		}
-		var constructorArgs []string
-		if len(cdef.ConstructorArgs) > 0 {
-			constructorArgs = cdef.ConstructorArgs
-		}
 
 		contractPath := fmt.Sprintf("%s:%s", project.ContractPath, project.MainContract)
-		deployedContract, err := manager.DeployContract(project, contractPath, constructorArgs, generateBindings, false)
+		deployedContract, err := manager.DeployContract(project, contractPath, resolvedArgs, generateBindings, false)
 
 		if err != nil {
 			fmt.Printf("Error: failed to deploy contract %s: %v\n", cdef.Name, err)
 			continue
+		}
+
+		deployments, err = config.LoadDeploymentRecords(deploymentsPath)
+		if err != nil {
+			return fmt.Errorf("failed to reload deployment records: %w", err)
 		}
 
 		fmt.Printf("\nContract %s deployed successfully!\n", cdef.Name)
@@ -735,6 +754,12 @@ func deployFromLocal(c *cli.Context) error {
 			fmt.Printf("Go Bindings: %s\n", deployedContract.BindingsPath)
 		}
 		fmt.Printf("====== Finished %s ======\n\n", cdef.Name)
+
+		if err := config.ExecutePostDeployment(cdef, deployedContract.Address.String(), convertToDeploymentRecords(deployments), rpcURL, manager.GetDeployerKey()); err != nil {
+			fmt.Printf("Warning: Post-deployment actions failed for %s: %v\n", cdef.Name, err)
+		}
+
+		time.Sleep(5 * time.Second)
 	}
 
 	fmt.Println("All deployments completed. Check deployments with: ./mpool-tx contract list")
@@ -868,6 +893,7 @@ func listDeployments(c *cli.Context) error {
 		fmt.Printf("   TX Hash: %s\n", deployment.TransactionHash.String())
 		fmt.Printf("   Deployer: %s\n", deployment.DeployerAddress.String())
 		fmt.Printf("   Deployer Key: %s\n", deployment.DeployerPrivateKey)
+		fmt.Printf("   Go binding generation: %v\n", deployment.BindingsPath != "")
 		if deployment.AbiPath != "" {
 			fmt.Printf("   ABI Path: %s\n", deployment.AbiPath)
 		}
@@ -1145,4 +1171,8 @@ func parsePrivateKey(privateKeyStr string) (*ecdsa.PrivateKey, error) {
 	}
 
 	return privateKey, nil
+}
+
+func convertToDeploymentRecords(deployments []config.DeploymentRecord) []config.DeploymentRecord {
+	return deployments
 }
