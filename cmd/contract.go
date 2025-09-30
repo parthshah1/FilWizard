@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1160,10 +1161,41 @@ func convertArgument(arg, argType string) (interface{}, error) {
 			return nil, fmt.Errorf("invalid uint256 value: %s", arg)
 		}
 		return val, nil
+	case "uint64":
+		if strings.HasPrefix(arg, "0x") {
+			val, err := strconv.ParseUint(arg[2:], 16, 64)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse hex uint64: %w", err)
+			}
+			return new(big.Int).SetUint64(val), nil
+		}
+		val, err := strconv.ParseUint(arg, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse uint64: %w", err)
+		}
+		return new(big.Int).SetUint64(val), nil
+	case "uint32":
+		if strings.HasPrefix(arg, "0x") {
+			val, err := strconv.ParseUint(arg[2:], 16, 32)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse hex uint32: %w", err)
+			}
+			return new(big.Int).SetUint64(uint64(val)), nil
+		}
+		val, err := strconv.ParseUint(arg, 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse uint32: %w", err)
+		}
+		return new(big.Int).SetUint64(uint64(val)), nil
 	case "bool":
 		return arg == "true", nil
 	case "string":
 		return arg, nil
+	case "bytes":
+		if strings.HasPrefix(arg, "0x") {
+			return common.FromHex(arg), nil
+		}
+		return []byte(arg), nil
 	default:
 		return nil, fmt.Errorf("unsupported type: %s", argType)
 	}
