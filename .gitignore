@@ -1,0 +1,25 @@
+# Binaries
+mpool-tx
+
+# Workspace directories
+workspace/
+contracts/
+
+# Go build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
