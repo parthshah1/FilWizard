@@ -1,22 +1,148 @@
 {
   "contracts": [
     {
-      "name": "SimpleCoin",
+      "name": "SessionKeyRegistry",
       "project_type": "foundry",
-      "git_url": "https://github.com/parthshah1/fevm-kit.git",
+      "git_url": "https://github.com/FilOzone/SessionKeyRegistry.git",
       "git_ref": "main",
-      "contract_path": "contracts/basic-solidity-examples/SimpleCoin.sol",
-      "main_contract": "SimpleCoin",
-      "constructor_args": ["1000"]
+      "contract_path": "src/SessionKeyRegistry.sol",
+      "main_contract": "SessionKeyRegistry",
+      "constructor_args": [],
+      "dependencies": []
     },
     {
-        "name": "PDP",
-        "project_type": "foundry",
-        "git_url": "https://github.com/FilOzone/pdp.git",
-        "git_ref": "main",
-        "contract_path": "src/PDPVerifier.sol",
-        "main_contract": "PDPVerifier",
-        "constructor_args": []
+      "name": "PDPVerifierImpl",
+      "project_type": "foundry",
+      "git_url": "https://github.com/FilOzone/pdp.git",
+      "git_ref": "main",
+      "contract_path": "src/PDPVerifier.sol",
+      "main_contract": "PDPVerifier",
+      "constructor_args": [],
+      "dependencies": []
+    },
+    {
+      "name": "PDPVerifierProxy",
+      "project_type": "foundry",
+      "git_url": "https://github.com/OpenZeppelin/openzeppelin-contracts.git",
+      "git_ref": "v5.0.0",
+      "contract_path": "contracts/proxy/ERC1967/ERC1967Proxy.sol",
+      "main_contract": "ERC1967Proxy",
+      "constructor_args": [
+        "${PDPVerifierImpl}",
+        "0x"
+      ],
+      "dependencies": ["PDPVerifierImpl"],
+      "post_deployment": {
+        "initialize": {
+          "method": "initialize",
+          "args": ["100"],
+          "types": ["uint256"],
+          "description": "Initialize PDPVerifier with challenge finality"
+        }
+      }
+    },
+    {
+      "name": "Payments",
+      "project_type": "foundry",
+      "git_url": "https://github.com/FilOzone/filecoin-pay.git",
+      "git_ref": "main",
+      "contract_path": "src/Payments.sol",
+      "main_contract": "Payments",
+      "constructor_args": [],
+      "dependencies": []
+    },
+    {
+      "name": "USDFC",
+      "project_type": "foundry",
+      "git_url": "https://github.com/parthshah1/ERC20.git",
+      "git_ref": "main",
+      "contract_path": "src/ERC20.sol",
+      "main_contract": "USDFC",
+      "constructor_args": [],
+      "dependencies": []
+    },
+
+    {
+      "name": "ServiceProviderRegistryImpl",
+      "project_type": "foundry",
+      "git_url": "https://github.com/FilOzone/filecoin-services.git",
+      "git_ref": "main",
+      "contract_path": "service_contracts/src/ServiceProviderRegistry.sol",
+      "main_contract": "ServiceProviderRegistry",
+      "constructor_args": [],
+      "dependencies": []
+    },
+    {
+      "name": "ServiceProviderRegistryProxy",
+      "project_type": "foundry",
+      "git_url": "https://github.com/OpenZeppelin/openzeppelin-contracts.git",
+      "git_ref": "v5.0.0",
+      "contract_path": "contracts/proxy/ERC1967/ERC1967Proxy.sol",
+      "main_contract": "ERC1967Proxy",
+      "constructor_args": [
+        "${ServiceProviderRegistryImpl}",
+        "0x"
+      ],
+      "dependencies": ["ServiceProviderRegistryImpl"],
+      "post_deployment": {
+        "initialize": {
+          "method": "initialize",
+          "args": [],
+          "types": [],
+          "description": "Initialize ServiceProviderRegistry proxy"
+        }
+      }
+    },
+
+    {
+      "name": "WarmStorageImpl",
+      "project_type": "foundry",
+      "git_url": "https://github.com/FilOzone/filecoin-services.git",
+      "git_ref": "main",
+      "contract_path": "service_contracts/src/FilecoinWarmStorageService.sol",
+      "main_contract": "FilecoinWarmStorageService",
+      "constructor_args": [
+        "${PDPVerifierProxy}",
+        "${Payments}",
+        "${USDFC}",
+        "0x0000000000000000000000000000000000000001",
+        "${ServiceProviderRegistryProxy}",
+        "${SessionKeyRegistry}"
+      ],
+      "dependencies": [
+        "Payments",
+        "SessionKeyRegistry",
+        "USDFC",
+        "PDPVerifierProxy",
+        "ServiceProviderRegistryProxy"
+      ]
+    },
+    {
+      "name": "WarmStorageProxy",
+      "project_type": "foundry",
+      "git_url": "https://github.com/OpenZeppelin/openzeppelin-contracts.git",
+      "git_ref": "v5.0.0",
+      "contract_path": "contracts/proxy/ERC1967/ERC1967Proxy.sol",
+      "main_contract": "ERC1967Proxy",
+      "constructor_args": [
+        "${WarmStorageImpl}",
+        "0x"
+      ],
+      "dependencies": ["WarmStorageImpl"],
+      "post_deployment": {
+        "initialize": {
+          "method": "initialize",
+          "args": [
+            "2880",
+            "100",
+            "0x0000000000000000000000000000000000000001",
+            "Filecoin Warm Storage",
+            "Decentralized warm storage service for Filecoin"
+          ],
+          "types": ["uint64", "uint256", "address", "string", "string"],
+          "description": "Initialize WarmStorage with service parameters"
+        }
+      }
     }
   ]
 }
