@@ -1,4 +1,4 @@
-BUILD_CMD = go build -o mpool-tx ./main.go
+BUILD_CMD = go build -o filwizard ./main.go
 
 build:
 	$(BUILD_CMD)
