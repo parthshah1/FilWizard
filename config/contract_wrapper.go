@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -94,6 +95,11 @@ func (cw *ContractWrapper) SendTransaction(methodName string, args []interface{}
 	err = cw.client.SendTransaction(context.Background(), signedTx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send transaction: %w", err)
+	}
+
+	_, err = cw.waitForTransactionReceipt(context.Background(), signedTx.Hash())
+	if err != nil {
+		return nil, fmt.Errorf("transaction failed: %w", err)
 	}
 
 	return signedTx, nil
@@ -209,6 +215,25 @@ func (cw *ContractWrapper) encodeArguments(args []interface{}) ([]byte, error) {
 
 	encoded := append(headWithOffsets, tail...)
 	return encoded, nil
+}
+
+func (cw *ContractWrapper) waitForTransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error) {
+	for i := 0; i < 60; i++ {
+		receipt, err := cw.client.TransactionReceipt(ctx, txHash)
+		if err == nil && receipt != nil {
+			if receipt.Status == 1 {
+				fmt.Printf("Transaction confirmed: %s\n", txHash.Hex())
+				return receipt, nil
+			} else {
+				return nil, fmt.Errorf("transaction failed: %s", txHash.Hex())
+			}
+		}
+
+		fmt.Printf("Waiting for transaction confirmation... %s\n", txHash.Hex())
+		time.Sleep(1 * time.Second)
+	}
+
+	return nil, fmt.Errorf("transaction not confirmed after waiting")
 }
 
 func (cw *ContractWrapper) Close() {

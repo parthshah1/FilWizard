@@ -30,6 +30,25 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
+func waitForTransactionReceipt(ctx context.Context, api api.FullNode, txHash ethtypes.EthHash) (*api.EthTxReceipt, error) {
+	for i := 0; i < 60; i++ {
+		receipt, err := api.EthGetTransactionReceipt(ctx, txHash)
+		if err == nil && receipt != nil {
+			if receipt.Status == 1 {
+				fmt.Printf("Transaction confirmed: %s\n", txHash.String())
+				return receipt, nil
+			} else {
+				return nil, fmt.Errorf("transaction failed: %s", txHash.String())
+			}
+		}
+
+		fmt.Printf("Waiting for transaction confirmation... %s\n", txHash.String())
+		time.Sleep(1 * time.Second)
+	}
+
+	return nil, fmt.Errorf("transaction not confirmed after waiting")
+}
+
 func SignTransaction(tx *ethtypes.Eth1559TxArgs, privateKey []byte) {
 	preimage, err := tx.ToRlpUnsignedMsg()
 	if err != nil {
@@ -164,11 +183,9 @@ func DeployContract(ctx context.Context, contractPath string, deployer string, f
 	}
 
 	fmt.Println("Waiting for transaction to be mined...")
-	time.Sleep(10 * time.Second)
-
-	receipt, err := api.EthGetTransactionReceipt(ctx, txHash)
+	receipt, err := waitForTransactionReceipt(ctx, api, txHash)
 	if err != nil {
-		return fmt.Errorf("failed to get transaction receipt: %w", err)
+		return fmt.Errorf("failed to wait for transaction receipt: %w", err)
 	}
 
 	if receipt == nil {
