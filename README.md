@@ -38,7 +38,7 @@ cd FilWizard
 # Build the binary
 make build
 
-# The binary will be available as ./FilWizard
+# The binary will be available as ./filwizard
 ```
 
 ### Prerequisites
@@ -90,16 +90,16 @@ Create new wallets with optional funding:
 
 ```bash
 # Create a single Filecoin wallet
-FilWizard wallet create
+filwizard wallet create
 
 # Create multiple Ethereum wallets with private keys shown
-FilWizard wallet create --count 10 --type ethereum --show-private-key
+filwizard wallet create --count 10 --type ethereum --show-private-key
 
 # Create and fund wallets
-FilWizard wallet create --count 5 --type ethereum --fund 100
+filwizard wallet create --count 5 --type ethereum --fund 100
 
 # Create BLS wallet
-FilWizard wallet create --type filecoin --key-type bls
+filwizard wallet create --type filecoin --key-type bls
 ```
 
 **Options:**
@@ -114,7 +114,7 @@ FilWizard wallet create --type filecoin --key-type bls
 Display all wallets with their balances:
 
 ```bash
-FilWizard wallet list
+filwizard wallet list
 ```
 
 #### Fund a Wallet
@@ -122,10 +122,10 @@ FilWizard wallet list
 Send FIL to a specific wallet:
 
 ```bash
-FilWizard wallet fund <address> <amount>
+filwizard wallet fund <address> <amount>
 
 # Example
-FilWizard wallet fund f410fx... 50
+filwizard wallet fund f410fx... 50
 ```
 
 #### Check Balance
@@ -133,10 +133,10 @@ FilWizard wallet fund f410fx... 50
 Get the balance of a specific wallet:
 
 ```bash
-FilWizard wallet balance <address>
+filwizard wallet balance <address>
 
 # Example
-FilWizard wallet balance f410fx...
+filwizard wallet balance f410fx...
 ```
 
 ### Mempool Operations
@@ -146,13 +146,13 @@ Test transaction throughput and mempool behavior under various conditions.
 #### Send a Single Transaction
 
 ```bash
-FilWizard mempool send <from> <to> <amount>
+filwizard mempool send <from> <to> <amount>
 
 # Wait for confirmation
-FilWizard mempool send <from> <to> <amount> --wait
+filwizard mempool send <from> <to> <amount> --wait
 
 # Example
-FilWizard mempool send f410fx... f410fy... 1.5 --wait
+filwizard mempool send f410fx... f410fy... 1.5 --wait
 ```
 
 #### Spam Transactions
@@ -161,10 +161,10 @@ Generate high-volume transaction load for stress testing:
 
 ```bash
 # Send 1000 transactions with default settings
-FilWizard mempool spam --count 1000
+filwizard mempool spam --count 1000
 
 # Advanced spam with custom parameters
-FilWizard mempool spam \
+filwizard mempool spam \
   --count 5000 \
   --amount 0.1 \
   --concurrent 10 \
@@ -181,14 +181,14 @@ FilWizard mempool spam \
 - `--refill-amount <fil>`: Amount to refill wallets in FIL (default: "10")
 - `--wait`: Wait for transaction confirmations
 
-**Note:** The spam command requires at least 2 wallets. Create wallets first using `FilWizard wallet create`.
+**Note:** The spam command requires at least 2 wallets. Create wallets first using `filwizard wallet create`.
 
 #### Send EIP-1559 Ethereum Transaction
 
 Send Ethereum-style transactions with custom gas parameters:
 
 ```bash
-FilWizard mempool eth \
+filwizard mempool eth \
   --from <address> \
   --to <address> \
   --value 1.0 \
@@ -214,7 +214,7 @@ FilWizard mempool eth \
 Get current mempool statistics:
 
 ```bash
-FilWizard mempool status
+filwizard mempool status
 ```
 
 ### Contract Operations
@@ -226,7 +226,7 @@ Comprehensive smart contract deployment and interaction capabilities.
 Deploy a pre-compiled contract from a hex file:
 
 ```bash
-FilWizard contract deploy <contract-file.hex> \
+filwizard contract deploy <contract-file.hex> \
   --contract-name MyContract \
   --deployer <address> \
   --fund 10 \
@@ -249,7 +249,7 @@ Clone and deploy contracts directly from Git repositories (supports both Foundry
 
 ```bash
 # Deploy a Foundry contract
-FilWizard contract from-git \
+filwizard contract from-git \
   --git-url https://github.com/username/project.git \
   --git-ref main \
   --project-type foundry \
@@ -260,7 +260,7 @@ FilWizard contract from-git \
   --bindings
 
 # Deploy with custom deployment script
-FilWizard contract from-git \
+filwizard contract from-git \
   --git-url https://github.com/username/hardhat-project.git \
   --project-type hardhat \
   --deploy-script scripts/deploy.sh \
@@ -291,7 +291,7 @@ For air-gapped or batch deployment scenarios, use the configuration-based workfl
 **Step 1: Clone repositories**
 
 ```bash
-FilWizard contract clone-config \
+filwizard contract clone-config \
   --config config/contracts.json \
   --workspace ./workspace
 ```
@@ -299,7 +299,7 @@ FilWizard contract clone-config \
 **Step 2: Deploy from local clones**
 
 ```bash
-FilWizard contract deploy-local \
+filwizard contract deploy-local \
   --config config/contracts.json \
   --workspace ./workspace \
   --rpc-url http://localhost:1234/rpc/v1 \
@@ -340,7 +340,7 @@ Interact with deployed contracts:
 
 ```bash
 # Read-only call (view/pure functions)
-FilWizard contract call \
+filwizard contract call \
   --contract 0x1234... \
   --method balanceOf \
   --args "0xabcd..." \
@@ -348,7 +348,7 @@ FilWizard contract call \
   --rpc-url http://localhost:1234/rpc/v1
 
 # State-changing transaction
-FilWizard contract call \
+filwizard contract call \
   --contract 0x1234... \
   --method transfer \
   --args "0xabcd...,100" \
@@ -370,10 +370,10 @@ FilWizard contract call \
 
 #### List Deployed Contracts
 
-View all contracts deployed through FilWizard:
+View all contracts deployed through filwizard:
 
 ```bash
-FilWizard contract list --workspace ./workspace
+filwizard contract list --workspace ./workspace
 ```
 
 #### Get Contract Information
@@ -381,7 +381,7 @@ FilWizard contract list --workspace ./workspace
 Get detailed information about a deployed contract:
 
 ```bash
-FilWizard contract info <contract-name> --workspace ./workspace
+filwizard contract info <contract-name> --workspace ./workspace
 ```
 
 #### Cleanup
@@ -389,7 +389,7 @@ FilWizard contract info <contract-name> --workspace ./workspace
 Remove temporary project directories:
 
 ```bash
-FilWizard contract cleanup --workspace ./workspace
+filwizard contract cleanup --workspace ./workspace
 ```
 
 ## Examples
@@ -400,14 +400,14 @@ Here's a complete example workflow for testing a DApp on Filecoin:
 
 ```bash
 # 1. Create test wallets
-FilWizard --rpc http://localhost:1234/rpc/v1 wallet create \
+filwizard --rpc http://localhost:1234/rpc/v1 wallet create \
   --count 10 \
   --type ethereum \
   --fund 100 \
   --show-private-key
 
 # 2. Deploy a contract from Git
-FilWizard contract from-git \
+filwizard contract from-git \
   --git-url https://github.com/parthshah1/fevm-kit.git \
   --git-ref main \
   --project-type foundry \
@@ -419,16 +419,16 @@ FilWizard contract from-git \
   --workspace ./workspace
 
 # 3. Get the deployed contract address
-FilWizard contract list --workspace ./workspace
+filwizard contract list --workspace ./workspace
 
 # 4. Call a contract method
-FilWizard contract call \
+filwizard contract call \
   --contract 0x... \
   --method totalSupply \
   --rpc-url http://localhost:1234/rpc/v1
 
 # 5. Send transactions to interact with the contract
-FilWizard contract call \
+filwizard contract call \
   --contract 0x... \
   --method transfer \
   --args "0xrecipient...,1000" \
@@ -438,7 +438,7 @@ FilWizard contract call \
   --gas-limit 100000
 
 # 6. Stress test the network
-FilWizard mempool spam \
+filwizard mempool spam \
   --count 10000 \
   --amount 0.01 \
   --concurrent 20
@@ -450,7 +450,7 @@ For deploying multiple contracts in sequence:
 
 ```bash
 # Create a deployer account once
-FilWizard contract from-git \
+filwizard contract from-git \
   --git-url https://github.com/project1/contracts.git \
   --create-deployer \
   --main-contract Token \
@@ -458,7 +458,7 @@ FilWizard contract from-git \
 
 # Use the same deployer for subsequent deployments
 # (The deployer key will be in workspace/deployments.json)
-FilWizard contract from-git \
+filwizard contract from-git \
   --git-url https://github.com/project2/contracts.git \
   --deployer-key 0x... \
   --main-contract NFT \
@@ -470,8 +470,8 @@ FilWizard contract from-git \
 For reproducible testing environments, use the configuration-based approach:
 
 1. Create `config/contracts.json` with your contracts
-2. Clone all repositories: `FilWizard contract clone-config`
-3. Deploy all contracts: `FilWizard contract deploy-local --create-deployer`
+2. Clone all repositories: `filwizard contract clone-config`
+3. Deploy all contracts: `filwizard contract deploy-local --create-deployer`
 
 This approach is ideal for:
 - **Air-gapped environments** where internet access is restricted
@@ -498,20 +498,20 @@ Antithesis provides deterministic replay capabilities for finding and reproducin
 export FILECOIN_RPC=http://filecoin-node:1234/rpc/v1
 
 # Create predictable wallets
-FilWizard wallet create --count 20 --type ethereum --fund 1000
+filwizard wallet create --count 20 --type ethereum --fund 1000
 
 # Deploy test contracts from configuration
-FilWizard contract clone-config --workspace /test-workspace
-FilWizard contract deploy-local \
+filwizard contract clone-config --workspace /test-workspace
+filwizard contract deploy-local \
   --workspace /test-workspace \
   --create-deployer
 
 # Execute test scenario
-FilWizard mempool spam --count 10000 --concurrent 50
+filwizard mempool spam --count 10000 --concurrent 50
 
 # Verify contract state
-for contract in $(FilWizard contract list --workspace /test-workspace); do
-  FilWizard contract call --contract $contract --method verify
+for contract in $(filwizard contract list --workspace /test-workspace); do
+  filwizard contract call --contract $contract --method verify
 done
 ```
 
