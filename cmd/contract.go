@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +30,25 @@ import (
 
 	"github.com/urfave/cli/v2"
 )
+
+func waitForTransactionReceipt(ctx context.Context, api api.FullNode, txHash ethtypes.EthHash) (*api.EthTxReceipt, error) {
+	for i := 0; i < 60; i++ {
+		receipt, err := api.EthGetTransactionReceipt(ctx, txHash)
+		if err == nil && receipt != nil {
+			if receipt.Status == 1 {
+				fmt.Printf("Transaction confirmed: %s\n", txHash.String())
+				return receipt, nil
+			} else {
+				return nil, fmt.Errorf("transaction failed: %s", txHash.String())
+			}
+		}
+
+		fmt.Printf("Waiting for transaction confirmation... %s\n", txHash.String())
+		time.Sleep(1 * time.Second)
+	}
+
+	return nil, fmt.Errorf("transaction not confirmed after waiting")
+}
 
 func SignTransaction(tx *ethtypes.Eth1559TxArgs, privateKey []byte) {
 	preimage, err := tx.ToRlpUnsignedMsg()
@@ -164,11 +184,9 @@ func DeployContract(ctx context.Context, contractPath string, deployer string, f
 	}
 
 	fmt.Println("Waiting for transaction to be mined...")
-	time.Sleep(10 * time.Second)
-
-	receipt, err := api.EthGetTransactionReceipt(ctx, txHash)
+	receipt, err := waitForTransactionReceipt(ctx, api, txHash)
 	if err != nil {
-		return fmt.Errorf("failed to get transaction receipt: %w", err)
+		return fmt.Errorf("failed to wait for transaction receipt: %w", err)
 	}
 
 	if receipt == nil {
@@ -1143,10 +1161,41 @@ func convertArgument(arg, argType string) (interface{}, error) {
 			return nil, fmt.Errorf("invalid uint256 value: %s", arg)
 		}
 		return val, nil
+	case "uint64":
+		if strings.HasPrefix(arg, "0x") {
+			val, err := strconv.ParseUint(arg[2:], 16, 64)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse hex uint64: %w", err)
+			}
+			return new(big.Int).SetUint64(val), nil
+		}
+		val, err := strconv.ParseUint(arg, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse uint64: %w", err)
+		}
+		return new(big.Int).SetUint64(val), nil
+	case "uint32":
+		if strings.HasPrefix(arg, "0x") {
+			val, err := strconv.ParseUint(arg[2:], 16, 32)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse hex uint32: %w", err)
+			}
+			return new(big.Int).SetUint64(uint64(val)), nil
+		}
+		val, err := strconv.ParseUint(arg, 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse uint32: %w", err)
+		}
+		return new(big.Int).SetUint64(uint64(val)), nil
 	case "bool":
 		return arg == "true", nil
 	case "string":
 		return arg, nil
+	case "bytes":
+		if strings.HasPrefix(arg, "0x") {
+			return common.FromHex(arg), nil
+		}
+		return []byte(arg), nil
 	default:
 		return nil, fmt.Errorf("unsupported type: %s", argType)
 	}
