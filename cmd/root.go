@@ -79,6 +79,8 @@ func NewApp() *cli.App {
 			MempoolCmd,
 			ContractCmd,
 			PropertiesCmd,
+			AccountsCmd,
+			PaymentsCmd,
 		},
 	}
 	return app

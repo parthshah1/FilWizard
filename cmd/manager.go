@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/filecoin-project/go-address"
 	"github.com/filecoin-project/lotus/chain/types"
 	"github.com/filecoin-project/lotus/chain/types/ethtypes"
 )
@@ -535,7 +537,75 @@ func (cm *ContractManager) saveDeployment(contract *DeployedContract) error {
 	dir := filepath.Dir(cm.deploymentsFile)
 	os.MkdirAll(dir, 0755)
 
-	return os.WriteFile(cm.deploymentsFile, data, 0644)
+	if err := os.WriteFile(cm.deploymentsFile, data, 0644); err != nil {
+		return err
+	}
+
+	// Also save deployer account to accounts.json
+	if contract.DeployerPrivateKey != "" {
+		if err := cm.saveDeployerAccount(contract); err != nil {
+			fmt.Printf("Warning: failed to save deployer account: %v\n", err)
+		}
+	}
+
+	return nil
+}
+
+func (cm *ContractManager) saveDeployerAccount(contract *DeployedContract) error {
+	accountsPath := filepath.Join(cm.workspaceDir, "accounts.json")
+
+	type AccountInfo struct {
+		Address    string `json:"address"`
+		EthAddress string `json:"ethAddress"`
+		PrivateKey string `json:"privateKey"`
+	}
+
+	type AccountsFile struct {
+		Accounts map[string]AccountInfo `json:"accounts"`
+	}
+
+	accounts := AccountsFile{Accounts: make(map[string]AccountInfo)}
+
+	// Load existing accounts if file exists
+	if data, err := os.ReadFile(accountsPath); err == nil {
+		if err := json.Unmarshal(data, &accounts); err != nil {
+			return fmt.Errorf("failed to parse existing accounts: %w", err)
+		}
+	}
+
+	// Convert eth address to Filecoin address
+	ethAddrStr := contract.DeployerAddress.String()
+	ethAddrBytes, err := hex.DecodeString(strings.TrimPrefix(ethAddrStr, "0x"))
+	if err != nil {
+		return fmt.Errorf("failed to decode eth address: %w", err)
+	}
+
+	filAddr, err := address.NewDelegatedAddress(10, ethAddrBytes)
+	if err != nil {
+		return fmt.Errorf("failed to create delegated address: %w", err)
+	}
+
+	// Only add deployer if it doesn't already exist
+	if _, exists := accounts.Accounts["deployer"]; !exists {
+		accounts.Accounts["deployer"] = AccountInfo{
+			Address:    filAddr.String(),
+			EthAddress: ethAddrStr,
+			PrivateKey: contract.DeployerPrivateKey,
+		}
+
+		data, err := json.MarshalIndent(accounts, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal accounts: %w", err)
+		}
+
+		if err := os.WriteFile(accountsPath, data, 0644); err != nil {
+			return fmt.Errorf("failed to write accounts file: %w", err)
+		}
+
+		fmt.Printf("Added deployer account to %s\n", accountsPath)
+	}
+
+	return nil
 }
 
 func (cm *ContractManager) LoadDeployments() ([]*DeployedContract, error) {
