@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -253,24 +254,73 @@ func saveDeploymentArtifacts(contractPath, contractAddress string, txHash ethtyp
 
 	finalAbiPath := filepath.Join(contractsDir, fmt.Sprintf("%s.abi.json", strings.ToLower(contractName)))
 
+	if abiPath == "" {
+		possiblePaths := []string{
+			fmt.Sprintf("contracts/%s.abi", contractName),
+			fmt.Sprintf("contracts/%s.abi.json", contractName),
+			fmt.Sprintf("contracts/%s.abi", strings.ToLower(contractName)),
+			fmt.Sprintf("contracts/%s.abi.json", strings.ToLower(contractName)),
+		}
+
+		for _, path := range possiblePaths {
+			if _, err := os.Stat(path); err == nil {
+				abiPath = path
+				fmt.Printf("Auto-detected ABI file: %s\n", abiPath)
+				break
+			}
+		}
+
+		if abiPath == "" {
+			fmt.Printf("No pre-compiled ABI found, attempting to generate from source...\n")
+
+			possibleSources := []string{
+				fmt.Sprintf("contracts/%s.sol", contractName),
+				fmt.Sprintf("contracts/%s.sol", strings.ToLower(contractName)),
+			}
+
+			var solPath string
+			for _, path := range possibleSources {
+				if _, err := os.Stat(path); err == nil {
+					solPath = path
+					fmt.Printf("Found Solidity source: %s\n", solPath)
+					break
+				}
+			}
+
+			if solPath != "" {
+				tempAbiPath := fmt.Sprintf("contracts/%s.abi", contractName)
+				if generatedAbi, err := generateABIFromSolidity(solPath, contractName, tempAbiPath); err == nil {
+					abiPath = generatedAbi
+					fmt.Printf("Generated ABI from Solidity source: %s\n", abiPath)
+				} else {
+					fmt.Printf("Warning: Failed to generate ABI from Solidity: %v\n", err)
+				}
+			} else {
+				fmt.Printf("WARNING: No Solidity source found in contracts/ directory\n")
+			}
+		}
+	}
+
 	if abiPath != "" {
 		abiData, err := os.ReadFile(abiPath)
 		if err != nil {
-			return fmt.Errorf("failed to read provided ABI file: %w", err)
+			return fmt.Errorf("failed to read ABI file: %w", err)
 		}
 
 		var abiDataParsed interface{}
 		if err := json.Unmarshal(abiData, &abiDataParsed); err != nil {
-			return fmt.Errorf("invalid ABI JSON in provided file: %w", err)
+			return fmt.Errorf("invalid ABI JSON: %w", err)
 		}
 
 		if err := os.WriteFile(finalAbiPath, abiData, 0644); err != nil {
 			return fmt.Errorf("failed to save ABI: %w", err)
 		}
 
-		fmt.Printf("Saved ABI from provided file to %s\n", finalAbiPath)
+		fmt.Printf("Saved ABI to %s\n", finalAbiPath)
 	} else {
-		fmt.Printf("Creating minimal ABI. Use --abi flag to provide proper ABI file.\n")
+		fmt.Printf("WARNING: Could not find or generate ABI\n")
+		fmt.Printf("Creating empty ABI - Go bindings will NOT have contract methods\n")
+		fmt.Printf("To fix: Place Solidity source at contracts/%s.sol\n", contractName)
 
 		minimalABI := []interface{}{}
 		abiBytes, err := json.Marshal(minimalABI)
@@ -282,7 +332,7 @@ func saveDeploymentArtifacts(contractPath, contractAddress string, txHash ethtyp
 			return fmt.Errorf("failed to save minimal ABI: %w", err)
 		}
 
-		fmt.Printf("Saved minimal ABI to %s\n", finalAbiPath)
+		fmt.Printf("Saved empty ABI to %s\n", finalAbiPath)
 	}
 
 	deployedContract.AbiPath = finalAbiPath
@@ -300,7 +350,12 @@ func saveDeploymentArtifacts(contractPath, contractAddress string, txHash ethtyp
 		return fmt.Errorf("failed to save deployment info: %w", err)
 	}
 
-	fmt.Printf("Saved deployment information to workspace\n")
+	fmt.Printf("Saved deployment information to workspace/deployments.json\n")
+
+	if err := manager.saveDeployerAccount(deployedContract); err != nil {
+		fmt.Printf("Warning: failed to save deployer account: %v\n", err)
+	}
+
 	return nil
 }
 
@@ -320,6 +375,42 @@ func generateGoBindingsFromHex(contractName, abiPath, bytecodePath, contractsDir
 	}
 
 	return bindingsPath, nil
+}
+
+func generateABIFromSolidity(solPath, contractName, outputPath string) (string, error) {
+	cmd := exec.Command("solc", "--abi", solPath, "-o", "contracts/", "--overwrite")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("solc compilation failed: %w, output: %s", err, output)
+	}
+
+	possibleAbiFiles := []string{
+		fmt.Sprintf("contracts/%s.abi", contractName),
+	}
+
+	solContent, err := os.ReadFile(solPath)
+	if err == nil {
+		re := regexp.MustCompile(`contract\s+(\w+)`)
+		matches := re.FindStringSubmatch(string(solContent))
+		if len(matches) > 1 {
+			actualContractName := matches[1]
+			possibleAbiFiles = append(possibleAbiFiles, fmt.Sprintf("contracts/%s.abi", actualContractName))
+		}
+	}
+
+	var generatedAbi string
+	for _, path := range possibleAbiFiles {
+		if _, err := os.Stat(path); err == nil {
+			generatedAbi = path
+			break
+		}
+	}
+
+	if generatedAbi == "" {
+		return "", fmt.Errorf("solc succeeded but ABI file not found")
+	}
+
+	return generatedAbi, nil
 }
 
 func getForgeABI(contractPath, contractName, contractsDir string) (string, error) {
@@ -610,48 +701,38 @@ var ContractCmd = &cli.Command{
 			Action: cleanupWorkspace,
 		},
 		{
-			Name:      "call",
-			Usage:     "Call a contract method",
-			ArgsUsage: "<contract-address> <method-name>",
-			Flags: []cli.Flag{
-				&cli.StringFlag{
-					Name:     "contract",
-					Usage:    "Contract address",
-					Required: true,
+			Name:  "call",
+			Usage: "Universal contract interaction with automatic type detection",
+			Subcommands: []*cli.Command{
+				{
+					Name:      "read",
+					Usage:     "Call a read-only contract method (view/pure)",
+					ArgsUsage: "<contract-name> <method-name> [args...]",
+					Action:    callReadMethod,
 				},
-				&cli.StringFlag{
-					Name:     "method",
-					Usage:    "Method name to call",
-					Required: true,
-				},
-				&cli.StringFlag{
-					Name:  "rpc-url",
-					Usage: "RPC URL for contract interaction",
-					Value: "http://localhost:1234/rpc/v1",
-				},
-				&cli.StringFlag{
-					Name:  "args",
-					Usage: "Method arguments (comma-separated)",
-				},
-				&cli.StringFlag{
-					Name:  "types",
-					Usage: "Argument types (comma-separated: address,uint256,bool,string)",
-				},
-				&cli.BoolFlag{
-					Name:  "transaction",
-					Usage: "Send as transaction (for state-changing functions)",
-				},
-				&cli.StringFlag{
-					Name:  "private-key",
-					Usage: "Private key for transaction signing (hex format, 0x prefix optional)",
-				},
-				&cli.Uint64Flag{
-					Name:  "gas-limit",
-					Usage: "Gas limit for transaction (0 = auto-estimate)",
-					Value: 0,
+				{
+					Name:      "write",
+					Usage:     "Send a transaction to a contract method",
+					ArgsUsage: "<contract-name> <method-name> [args...]",
+					Flags: []cli.Flag{
+						&cli.StringFlag{
+							Name:  "from",
+							Usage: "Account role to send transaction from (creates new if doesn't exist)",
+						},
+						&cli.Uint64Flag{
+							Name:  "gas",
+							Value: 0,
+							Usage: "Gas limit (0 = auto-estimate)",
+						},
+						&cli.StringFlag{
+							Name:  "fund",
+							Value: "1",
+							Usage: "Amount to fund new accounts (FIL)",
+						},
+					},
+					Action: callWriteMethod,
 				},
 			},
-			Action: callContractMethod,
 		},
 	},
 }
@@ -979,11 +1060,10 @@ func deployWithCustomScript(c *cli.Context) error {
 	project := &ContractProject{
 		GitURL:   c.String("git-url"),
 		GitRef:   c.String("git-ref"),
-		CloneDir: "", // Will be set by CloneRepository
+		CloneDir: "",
 		Env:      make(map[string]string),
 	}
 
-	// Parse environment variables
 	envVars := c.StringSlice("env")
 	for _, envVar := range envVars {
 		parts := strings.SplitN(envVar, "=", 2)
@@ -992,14 +1072,12 @@ func deployWithCustomScript(c *cli.Context) error {
 		}
 	}
 
-	// Clone repository
 	fmt.Printf("Cloning repository: %s\n", project.GitURL)
 	if err := manager.CloneRepository(project); err != nil {
 		return fmt.Errorf("failed to clone repository: %w", err)
 	}
 	fmt.Printf("Repository cloned to: %s\n", project.CloneDir)
 
-	// Run custom deployment script
 	deployScript := c.String("deploy-script")
 	fmt.Printf("Running custom deployment script: %s\n", deployScript)
 	if err := manager.RunCustomDeployScript(project, deployScript); err != nil {
@@ -1010,7 +1088,6 @@ func deployWithCustomScript(c *cli.Context) error {
 }
 
 func deployWithShellCommands(c *cli.Context) error {
-	// Create contract manager
 	manager := NewContractManager(c.String("workspace"), c.String("rpc-url"))
 
 	if c.Bool("create-deployer") {
@@ -1027,15 +1104,13 @@ func deployWithShellCommands(c *cli.Context) error {
 		return fmt.Errorf("either --create-deployer or --deployer-key must be provided")
 	}
 
-	// Create minimal project configuration for shell commands
 	project := &ContractProject{
 		GitURL:   c.String("git-url"),
 		GitRef:   c.String("git-ref"),
-		CloneDir: "", // Will be set by CloneRepository
+		CloneDir: "",
 		Env:      make(map[string]string),
 	}
 
-	// Parse environment variables
 	envVars := c.StringSlice("env")
 	for _, envVar := range envVars {
 		parts := strings.SplitN(envVar, "=", 2)
@@ -1044,14 +1119,12 @@ func deployWithShellCommands(c *cli.Context) error {
 		}
 	}
 
-	// Clone repository
 	fmt.Printf("Cloning repository: %s\n", project.GitURL)
 	if err := manager.CloneRepository(project); err != nil {
 		return fmt.Errorf("failed to clone repository: %w", err)
 	}
 	fmt.Printf("Repository cloned to: %s\n", project.CloneDir)
 
-	// Run shell commands
 	commands := c.String("commands")
 	fmt.Printf("Running shell commands: %s\n", commands)
 	if err := manager.RunShellCommands(project, commands); err != nil {
@@ -1061,144 +1134,277 @@ func deployWithShellCommands(c *cli.Context) error {
 	return nil
 }
 
-func callContractMethod(c *cli.Context) error {
-	contractAddress := c.String("contract")
-	methodName := c.String("method")
-	rpcURL := c.String("rpc-url")
-	argsStr := c.String("args")
-	typesStr := c.String("types")
-	isTransaction := c.Bool("transaction")
-	privateKeyStr := c.String("private-key")
-	gasLimit := c.Uint64("gas-limit")
+func callReadMethod(c *cli.Context) error {
+	if c.NArg() < 2 {
+		return fmt.Errorf("usage: contract call read <contract-name> <method-name> [args...]")
+	}
 
-	var args, types []string
-	if argsStr != "" {
-		args = strings.Split(argsStr, ",")
-		for i, arg := range args {
-			args[i] = strings.TrimSpace(arg)
+	workspace := "./workspace"
+	contractName := c.Args().Get(0)
+	methodName := c.Args().Get(1)
+
+	methodArgs := []string{}
+	for i := 2; i < c.NArg(); i++ {
+		arg := c.Args().Get(i)
+		methodArgs = append(methodArgs, arg)
+	}
+
+	deployments, err := loadDeployments(workspace)
+	if err != nil {
+		return err
+	}
+
+	var contractAddr string
+	for _, d := range deployments {
+		if strings.EqualFold(d.Name, contractName) {
+			contractAddr = d.Address
+			break
 		}
 	}
-	if typesStr != "" {
-		types = strings.Split(typesStr, ",")
-		for i, t := range types {
-			types[i] = strings.TrimSpace(t)
-		}
+	if contractAddr == "" {
+		return fmt.Errorf("contract '%s' not found in deployments", contractName)
 	}
 
-	if len(args) != len(types) {
-		return fmt.Errorf("number of arguments (%d) must match number of types (%d)", len(args), len(types))
+	cfg, err := loadWorkspaceConfig()
+	if err != nil {
+		return err
 	}
 
-	wrapper, err := config.NewContractWrapper(rpcURL, contractAddress)
+	wrapper, err := config.NewContractWrapper(cfg.RPC, contractAddr)
 	if err != nil {
 		return fmt.Errorf("failed to create contract wrapper: %w", err)
 	}
 	defer wrapper.Close()
 
-	convertedArgs, err := convertArguments(args, types)
+	args, err := parseArguments(methodArgs)
 	if err != nil {
-		return fmt.Errorf("failed to convert arguments: %w", err)
+		return fmt.Errorf("failed to parse arguments: %w", err)
 	}
 
-	if isTransaction {
-		if privateKeyStr == "" {
-			return fmt.Errorf("private key is required for transactions")
-		}
+	fmt.Printf("Calling %s.%s(%v)\n", contractName, methodName, formatArgs(args))
 
-		privateKey, err := parsePrivateKey(privateKeyStr)
-		if err != nil {
-			return fmt.Errorf("failed to parse private key: %w", err)
-		}
-
-		tx, err := wrapper.SendTransaction(methodName, convertedArgs, privateKey, gasLimit)
-		if err != nil {
-			return fmt.Errorf("failed to send transaction: %w", err)
-		}
-
-		fmt.Printf("Transaction sent successfully!\n")
-		fmt.Printf("Method: %s\n", methodName)
-		fmt.Printf("Transaction Hash: %s\n", tx.Hash().Hex())
-		fmt.Printf("Gas Limit: %d\n", tx.Gas())
-		fmt.Printf("Gas Price: %s\n", tx.GasPrice().String())
-	} else {
-		result, err := wrapper.CallMethod(methodName, convertedArgs)
-		if err != nil {
-			return fmt.Errorf("failed to call contract method: %w", err)
-		}
-
-		fmt.Printf("Method: %s\n", methodName)
-		fmt.Printf("Result: 0x%x\n", result)
+	result, err := wrapper.CallMethod(methodName, args)
+	if err != nil {
+		return fmt.Errorf("call failed: %w", err)
 	}
+
+	fmt.Printf("Contract: %s (%s)\n", contractName, contractAddr)
+	fmt.Printf("Method: %s\n", methodName)
+	fmt.Printf("Result (hex): 0x%x\n", result)
+	fmt.Printf("Result (uint256): %s\n", new(big.Int).SetBytes(result).String())
 
 	return nil
 }
 
-func convertArguments(args, types []string) ([]interface{}, error) {
-	if len(args) != len(types) {
-		return nil, fmt.Errorf("argument count mismatch")
+func callWriteMethod(c *cli.Context) error {
+	if c.NArg() < 2 {
+		return fmt.Errorf("usage: contract call write <contract-name> <method-name> [args...]")
 	}
 
-	converted := make([]interface{}, len(args))
-	for i, arg := range args {
-		argType := types[i]
-		convertedArg, err := convertArgument(arg, argType)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert argument %d (%s): %w", i, arg, err)
+	ctx := context.Background()
+	workspace := "./workspace"
+
+	allArgs := c.Args().Slice()
+	var contractName, methodName, fromRole string
+	var methodArgs []string
+	gasLimit := c.Uint64("gas")
+	fundAmount := "1"
+
+	parsedFlags := make(map[string]string)
+	i := 0
+	for i < len(allArgs) {
+		arg := allArgs[i]
+
+		if arg == "--from" && i+1 < len(allArgs) {
+			parsedFlags["from"] = allArgs[i+1]
+			i += 2
+			continue
 		}
-		converted[i] = convertedArg
+		if arg == "--fund" && i+1 < len(allArgs) {
+			parsedFlags["fund"] = allArgs[i+1]
+			i += 2
+			continue
+		}
+		if arg == "--gas" && i+1 < len(allArgs) {
+			val := allArgs[i+1]
+			if gasVal, err := strconv.ParseUint(val, 10, 64); err == nil {
+				gasLimit = gasVal
+			}
+			i += 2
+			continue
+		}
+
+		if contractName == "" {
+			contractName = arg
+		} else if methodName == "" {
+			methodName = arg
+		} else {
+			methodArgs = append(methodArgs, arg)
+		}
+		i++
 	}
 
-	return converted, nil
+	if contractName == "" || methodName == "" {
+		return fmt.Errorf("usage: contract call write <contract-name> <method-name> [args...] [--from <role>] [--fund <amount>] [--gas <limit>]")
+	}
+
+	fromRole = parsedFlags["from"]
+	if val, ok := parsedFlags["fund"]; ok {
+		fundAmount = val
+	}
+
+	deployments, err := loadDeployments(workspace)
+	if err != nil {
+		return err
+	}
+
+	accounts, err := loadAccounts(workspace)
+	if err != nil {
+		accounts = &AccountsFile{Accounts: make(map[string]AccountInfo)}
+	}
+
+	var contractAddr string
+	for _, d := range deployments {
+		if strings.EqualFold(d.Name, contractName) {
+			contractAddr = d.Address
+			break
+		}
+	}
+	if contractAddr == "" {
+		return fmt.Errorf("contract '%s' not found in deployments", contractName)
+	}
+
+	var fromAccount AccountInfo
+	var needsCreation bool
+
+	if fromRole == "" {
+		fromRole = "caller"
+		needsCreation = true
+	} else {
+		var ok bool
+		fromAccount, ok = accounts.Accounts[fromRole]
+		if !ok {
+			needsCreation = true
+		}
+	}
+
+	if needsCreation {
+		fmt.Printf("Creating new account '%s'...\n", fromRole)
+
+		key, ethAddr, filAddr := NewAccount()
+		if key == nil {
+			return fmt.Errorf("failed to create account")
+		}
+
+		privateKeyHex := fmt.Sprintf("0x%x", key.PrivateKey)
+
+		fromAccount = AccountInfo{
+			Address:    filAddr.String(),
+			EthAddress: ethAddr.String(),
+			PrivateKey: privateKeyHex,
+		}
+
+		amount, _ := filbig.FromString(fundAmount)
+		fundAmountAtto := types.BigMul(amount, types.NewInt(1e18))
+
+		fmt.Printf("Funding %s with %s FIL...\n", fromRole, fundAmount)
+		_, err := FundWallet(ctx, filAddr, fundAmountAtto, true)
+		if err != nil {
+			return fmt.Errorf("failed to fund account: %w", err)
+		}
+
+		accounts.Accounts[fromRole] = fromAccount
+
+		accountsPath := filepath.Join(workspace, "accounts.json")
+		accountsData, err := json.MarshalIndent(accounts, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal accounts: %w", err)
+		}
+
+		if err := os.WriteFile(accountsPath, accountsData, 0644); err != nil {
+			return fmt.Errorf("failed to save accounts: %w", err)
+		}
+
+		fmt.Printf("Account '%s' created and saved: %s\n", fromRole, ethAddr.String())
+
+		fmt.Println("Waiting for funds to be available...")
+		time.Sleep(5 * time.Second)
+	}
+
+	cfg, err := loadWorkspaceConfig()
+	if err != nil {
+		return err
+	}
+
+	wrapper, err := config.NewContractWrapper(cfg.RPC, contractAddr)
+	if err != nil {
+		return fmt.Errorf("failed to create contract wrapper: %w", err)
+	}
+	defer wrapper.Close()
+
+	args, err := parseArguments(methodArgs)
+	if err != nil {
+		return fmt.Errorf("failed to parse arguments: %w", err)
+	}
+
+	privateKey, err := crypto.HexToECDSA(fromAccount.PrivateKey[2:])
+	if err != nil {
+		return fmt.Errorf("invalid private key: %w", err)
+	}
+
+	fmt.Printf("Sending transaction to %s.%s(%v)\n", contractName, methodName, formatArgs(args))
+	fmt.Printf("From: %s (%s)\n", fromRole, fromAccount.EthAddress)
+
+	tx, err := wrapper.SendTransaction(methodName, args, privateKey, gasLimit)
+	if err != nil {
+		return fmt.Errorf("transaction failed: %w", err)
+	}
+
+	fmt.Printf("Transaction successful: %s\n", tx.Hash().Hex())
+
+	return nil
 }
 
-func convertArgument(arg, argType string) (interface{}, error) {
-	switch argType {
-	case "address":
-		return common.HexToAddress(arg), nil
-	case "uint256", "uint":
-		val, ok := new(big.Int).SetString(arg, 10)
-		if !ok {
-			return nil, fmt.Errorf("invalid uint256 value: %s", arg)
+func parseArguments(args []string) ([]interface{}, error) {
+	parsed := make([]interface{}, len(args))
+
+	for i, arg := range args {
+		if strings.HasPrefix(arg, "0x") && len(arg) == 42 {
+			parsed[i] = common.HexToAddress(arg)
+		} else if arg == "true" || arg == "false" {
+			parsed[i] = arg == "true"
+		} else if val, ok := new(big.Int).SetString(arg, 10); ok {
+			parsed[i] = val
+		} else {
+			parsed[i] = arg
 		}
-		return val, nil
-	case "uint64":
-		if strings.HasPrefix(arg, "0x") {
-			val, err := strconv.ParseUint(arg[2:], 16, 64)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse hex uint64: %w", err)
-			}
-			return new(big.Int).SetUint64(val), nil
-		}
-		val, err := strconv.ParseUint(arg, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse uint64: %w", err)
-		}
-		return new(big.Int).SetUint64(val), nil
-	case "uint32":
-		if strings.HasPrefix(arg, "0x") {
-			val, err := strconv.ParseUint(arg[2:], 16, 32)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse hex uint32: %w", err)
-			}
-			return new(big.Int).SetUint64(uint64(val)), nil
-		}
-		val, err := strconv.ParseUint(arg, 10, 32)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse uint32: %w", err)
-		}
-		return new(big.Int).SetUint64(uint64(val)), nil
-	case "bool":
-		return arg == "true", nil
-	case "string":
-		return arg, nil
-	case "bytes":
-		if strings.HasPrefix(arg, "0x") {
-			return common.FromHex(arg), nil
-		}
-		return []byte(arg), nil
-	default:
-		return nil, fmt.Errorf("unsupported type: %s", argType)
 	}
+
+	return parsed, nil
+}
+
+func formatArgs(args []interface{}) string {
+	if len(args) == 0 {
+		return ""
+	}
+
+	formatted := make([]string, len(args))
+	for i, arg := range args {
+		switch v := arg.(type) {
+		case common.Address:
+			formatted[i] = v.Hex()
+		case *big.Int:
+			formatted[i] = v.String()
+		case bool:
+			formatted[i] = fmt.Sprintf("%v", v)
+		case string:
+			formatted[i] = fmt.Sprintf(`"%s"`, v)
+		default:
+			formatted[i] = fmt.Sprintf("%v", v)
+		}
+	}
+
+	return strings.Join(formatted, ", ")
 }
 
 func parsePrivateKey(privateKeyStr string) (*ecdsa.PrivateKey, error) {
@@ -1209,11 +1415,9 @@ func parsePrivateKey(privateKeyStr string) (*ecdsa.PrivateKey, error) {
 		return nil, fmt.Errorf("invalid hex format: %w", err)
 	}
 
-	// Validate key length (32 bytes for secp256k1)
 	if len(privateKeyBytes) != 32 {
 		return nil, fmt.Errorf("invalid private key length: got %d bytes, want 32 bytes (secp256k1)", len(privateKeyBytes))
 	}
-	// Create private key
 	privateKey, err := crypto.ToECDSA(privateKeyBytes)
 	if err != nil {
 		return nil, fmt.Errorf("invalid private key: %w", err)
