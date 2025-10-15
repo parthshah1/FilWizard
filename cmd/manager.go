@@ -9,8 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
-	"time"
 
 	"github.com/filecoin-project/go-address"
 	"github.com/filecoin-project/lotus/chain/types"
@@ -25,15 +25,17 @@ const (
 )
 
 type ContractProject struct {
-	Name         string            `json:"name"`
-	GitURL       string            `json:"git_url"`
-	GitRef       string            `json:"git_ref,omitempty"`
-	ProjectType  ProjectType       `json:"project_type"`
-	MainContract string            `json:"main_contract"`
-	ContractPath string            `json:"contract_path,omitempty"`
-	CloneDir     string            `json:"clone_dir"`
-	GenerateAbi  bool              `json:"generate_abi,omitempty"`
-	Env          map[string]string `json:"env"`
+	Name          string            `json:"name"`
+	GitURL        string            `json:"git_url"`
+	GitRef        string            `json:"git_ref,omitempty"`
+	ProjectType   ProjectType       `json:"project_type"`
+	MainContract  string            `json:"main_contract"`
+	ContractPath  string            `json:"contract_path,omitempty"`
+	CloneDir      string            `json:"clone_dir"`
+	ScriptDir     string            `json:"script_dir,omitempty"`
+	GenerateAbi   bool              `json:"generate_abi,omitempty"`
+	Env           map[string]string `json:"env"`
+	CloneCommands []string          `json:"clone_commands,omitempty"`
 }
 
 type DeployedContract struct {
@@ -80,7 +82,7 @@ func (cm *ContractManager) CloneRepository(project *ContractProject) error {
 	}
 
 	if project.CloneDir == "" {
-		project.CloneDir = filepath.Join(cm.workspaceDir, fmt.Sprintf("project_%d", time.Now().Unix()))
+		project.CloneDir = filepath.Join(cm.workspaceDir, project.Name)
 	} else {
 		if !filepath.IsAbs(project.CloneDir) {
 			project.CloneDir = filepath.Join(cm.workspaceDir, project.CloneDir)
@@ -111,6 +113,35 @@ func (cm *ContractManager) CloneRepository(project *ContractProject) error {
 			return fmt.Errorf("failed to checkout git reference '%s': %w, output: %s", project.GitRef, err, checkoutOutput)
 		}
 		fmt.Printf("Successfully checked out: %s\n", project.GitRef)
+	}
+
+	// Execute clone commands if specified
+	if len(project.CloneCommands) > 0 {
+		fmt.Printf("Executing %d clone command(s)...\n", len(project.CloneCommands))
+		for i, cmdStr := range project.CloneCommands {
+			cmdStr = strings.TrimSpace(cmdStr)
+			if cmdStr == "" {
+				continue
+			}
+
+			fmt.Printf("Running clone command %d/%d: %s\n", i+1, len(project.CloneCommands), cmdStr)
+
+			cloneCmd := exec.Command("sh", "-c", cmdStr)
+			cloneCmd.Dir = project.CloneDir // Set working directory to the cloned repo
+			cloneCmd.Env = os.Environ()
+			if project.Env != nil {
+				for key, value := range project.Env {
+					cloneCmd.Env = append(cloneCmd.Env, fmt.Sprintf("%s=%s", key, value))
+				}
+			}
+
+			cloneOutput, err := cloneCmd.CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("failed to run clone command '%s': %w, output: %s", cmdStr, err, cloneOutput)
+			}
+
+			fmt.Printf("Clone command completed successfully\n")
+		}
 	}
 
 	return nil
@@ -239,9 +270,15 @@ func (cm *ContractManager) DeployContract(project *ContractProject, contractPath
 		contractFile,
 	}
 
-	if len(constructorArgs) > 0 {
+	// Process constructor args for special cases (like encoded init data)
+	processedArgs, err := processConstructorArgs(constructorArgs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to process constructor args: %w", err)
+	}
+
+	if len(processedArgs) > 0 {
 		args = append(args, "--constructor-args")
-		args = append(args, constructorArgs...)
+		args = append(args, processedArgs...)
 	}
 
 	cmd := exec.Command("forge", args...)
@@ -422,19 +459,24 @@ func (cm *ContractManager) parseForgeCreateOutput(output string, project *Contra
 	}, nil
 }
 
-func (cm *ContractManager) RunCustomDeployScript(project *ContractProject, scriptPath string) error {
+func (cm *ContractManager) RunCustomDeployScript(project *ContractProject, scriptPath string) (string, error) {
 	originalDir, err := os.Getwd()
 	if err != nil {
-		return fmt.Errorf("failed to get current directory: %w", err)
+		return "", fmt.Errorf("failed to get current directory: %w", err)
 	}
 	defer os.Chdir(originalDir)
 
-	if err := os.Chdir(project.CloneDir); err != nil {
-		return fmt.Errorf("failed to change to project directory: %w", err)
+	workingDir := project.CloneDir
+	if project.ScriptDir != "" {
+		workingDir = filepath.Join(project.CloneDir, project.ScriptDir)
+	}
+
+	if err := os.Chdir(workingDir); err != nil {
+		return "", fmt.Errorf("failed to change to script directory: %w", err)
 	}
 
 	if err := os.Chmod(scriptPath, 0755); err != nil {
-		return fmt.Errorf("failed to make script executable: %w", err)
+		return "", fmt.Errorf("failed to make script executable: %w", err)
 	}
 
 	cmd := exec.Command("bash", scriptPath)
@@ -455,7 +497,7 @@ func (cm *ContractManager) RunCustomDeployScript(project *ContractProject, scrip
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to run deployment script: %w, output: %s", err, output)
+		return string(output), fmt.Errorf("failed to run deployment script: %w, output: %s", err, output)
 	}
 
 	log.Printf("Deployment script output: %s", string(output))
@@ -464,7 +506,7 @@ func (cm *ContractManager) RunCustomDeployScript(project *ContractProject, scrip
 		fmt.Printf("Warning: Failed to cleanup project directory: %v\n", err)
 	}
 
-	return nil
+	return string(output), nil
 }
 
 func (cm *ContractManager) RunShellCommands(project *ContractProject, commands string) error {
@@ -474,8 +516,13 @@ func (cm *ContractManager) RunShellCommands(project *ContractProject, commands s
 	}
 	defer os.Chdir(originalDir)
 
-	if err := os.Chdir(project.CloneDir); err != nil {
-		return fmt.Errorf("failed to change to project directory: %w", err)
+	workingDir := project.CloneDir
+	if project.ScriptDir != "" {
+		workingDir = filepath.Join(project.CloneDir, project.ScriptDir)
+	}
+
+	if err := os.Chdir(workingDir); err != nil {
+		return fmt.Errorf("failed to change to script directory: %w", err)
 	}
 
 	commandList := strings.Split(commands, ";")
@@ -641,6 +688,48 @@ func (cm *ContractManager) GetDeployment(contractName string) (*DeployedContract
 	return nil, fmt.Errorf("deployment not found for contract: %s", contractName)
 }
 
+func (cm *ContractManager) EnsureCloneCommandsExecuted(project *ContractProject) error {
+	if len(project.CloneCommands) == 0 {
+		return nil
+	}
+
+	// Check if the clone directory exists
+	if _, err := os.Stat(project.CloneDir); os.IsNotExist(err) {
+		return fmt.Errorf("project directory %s does not exist", project.CloneDir)
+	}
+
+	// For now, always run clone commands to ensure submodules are initialized
+	// In the future, we could add more sophisticated checks
+	fmt.Printf("Ensuring clone commands are executed for %s...\n", project.Name)
+
+	for i, cmdStr := range project.CloneCommands {
+		cmdStr = strings.TrimSpace(cmdStr)
+		if cmdStr == "" {
+			continue
+		}
+
+		fmt.Printf("Running clone command %d/%d: %s\n", i+1, len(project.CloneCommands), cmdStr)
+
+		cloneCmd := exec.Command("sh", "-c", cmdStr)
+		cloneCmd.Dir = project.CloneDir // Set working directory to the cloned repo
+		cloneCmd.Env = os.Environ()
+		if project.Env != nil {
+			for key, value := range project.Env {
+				cloneCmd.Env = append(cloneCmd.Env, fmt.Sprintf("%s=%s", key, value))
+			}
+		}
+
+		cloneOutput, err := cloneCmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to run clone command '%s': %w, output: %s", cmdStr, err, cloneOutput)
+		}
+
+		fmt.Printf("Clone command completed successfully\n")
+	}
+
+	return nil
+}
+
 func (cm *ContractManager) CleanupProject(project *ContractProject) error {
 	if project.CloneDir == "" {
 		return nil
@@ -671,4 +760,171 @@ func (cm *ContractManager) CleanupWorkspace() error {
 	}
 
 	return nil
+}
+
+// ImportScriptOutputToDeployments parses arbitrary script output and imports contract addresses
+// into the workspace deployments.json. The expected file contains lines with '<Name>: <address>'
+// or any line containing a 0x-prefixed address. All contracts found in the output will be
+// added/updated.
+func (cm *ContractManager) ImportScriptOutputToDeployments(contractsConfigPath, deploymentsPath, outputPath string) error {
+	// Read script output
+	outData, err := os.ReadFile(outputPath)
+	if err != nil {
+		return fmt.Errorf("failed to read output file: %w", err)
+	}
+
+	lines := strings.Split(string(outData), "\n")
+	fmt.Printf("DEBUG: Read %d lines from script output\n", len(lines))
+
+	// Load existing deployments if present
+	var existing []*DeployedContract
+	if data, err := os.ReadFile(deploymentsPath); err == nil {
+		_ = json.Unmarshal(data, &existing) // ignore error, we'll overwrite if malformed
+	}
+	fmt.Printf("DEBUG: Loaded %d existing deployments\n", len(existing))
+
+	// Map by name for easy lookup
+	byName := make(map[string]*DeployedContract)
+	for _, d := range existing {
+		byName[strings.ToLower(d.Name)] = d
+	}
+
+	// Parse lines for patterns like 'Name: 0x...' or 'Name 0x...'
+	reAddr := regexp.MustCompile(`0x[0-9a-fA-F]{40}`)
+	reNameAddr := regexp.MustCompile(`(?i)^\s*([A-Za-z0-9_\-]+)[:\s]+(0x[0-9a-fA-F]{40})`) // captures name and addr
+
+	parsedCount := 0
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		// try name: addr
+		if m := reNameAddr.FindStringSubmatch(line); len(m) == 3 {
+			name := strings.ToLower(m[1])
+			addrStr := m[2]
+			ethAddr, err := ethtypes.ParseEthAddress(addrStr)
+			if err != nil {
+				continue
+			}
+			d := &DeployedContract{
+				Name:            name,
+				Address:         ethAddr,
+				DeployerAddress: ethtypes.EthAddress{},
+			}
+			byName[name] = d
+			parsedCount++
+			fmt.Printf("DEBUG: Parsed contract %s: %s\n", name, addrStr)
+			continue
+		}
+
+		// otherwise try to find an address and heuristically match a contract name in the line
+		if addr := reAddr.FindString(line); addr != "" {
+			// try to find any known contract name appearing in the line
+			lower := strings.ToLower(line)
+			for allowedName := range byName {
+				if strings.Contains(lower, allowedName) {
+					ethAddr, err := ethtypes.ParseEthAddress(addr)
+					if err != nil {
+						continue
+					}
+					d := &DeployedContract{
+						Name:            allowedName,
+						Address:         ethAddr,
+						DeployerAddress: ethtypes.EthAddress{},
+					}
+					byName[allowedName] = d
+					parsedCount++
+					fmt.Printf("DEBUG: Parsed contract %s: %s (heuristic)\n", allowedName, addr)
+					break
+				}
+			}
+		}
+	}
+	fmt.Printf("DEBUG: Parsed %d contracts from script output\n", parsedCount)
+
+	// Recreate deployments slice preserving unknown entries
+	var out []*DeployedContract
+	// keep existing entries that weren't updated
+	for _, d := range existing {
+		lname := strings.ToLower(d.Name)
+		if nd, ok := byName[lname]; ok {
+			out = append(out, nd)
+			delete(byName, lname)
+		} else {
+			out = append(out, d)
+		}
+	}
+	// add any new entries parsed
+	for _, d := range byName {
+		out = append(out, d)
+	}
+	fmt.Printf("DEBUG: Final deployments count: %d\n", len(out))
+
+	// write back
+	outBytes, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal deployments: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(deploymentsPath), 0755); err != nil {
+		return fmt.Errorf("failed to ensure deployments dir: %w", err)
+	}
+
+	if err := os.WriteFile(deploymentsPath, outBytes, 0644); err != nil {
+		return fmt.Errorf("failed to write deployments file: %w", err)
+	}
+
+	fmt.Printf("DEBUG: Successfully wrote %d contracts to %s\n", len(out), deploymentsPath)
+	return nil
+}
+
+// processConstructorArgs handles special constructor argument formats
+func processConstructorArgs(args []string) ([]string, error) {
+	processedArgs := make([]string, len(args))
+
+	for i, arg := range args {
+		if strings.HasPrefix(arg, "CAST_CALLDATA:") {
+			// Parse the CAST_CALLDATA format and convert it to actual call data
+			callData, err := processCastCallData(arg)
+			if err != nil {
+				return nil, fmt.Errorf("failed to process cast calldata: %w", err)
+			}
+			processedArgs[i] = callData
+		} else {
+			processedArgs[i] = arg
+		}
+	}
+
+	return processedArgs, nil
+}
+
+// processCastCallData converts CAST_CALLDATA format to actual encoded call data
+func processCastCallData(castCallData string) (string, error) {
+	// Format: CAST_CALLDATA:initialize(uint64,uint256,address,string,string):60:30:0x0000...:"Service Name":"Service Desc"
+	// Or: CAST_CALLDATA:initialize() for no-arg functions
+	parts := strings.Split(castCallData, ":")
+	if len(parts) < 2 {
+		return "", fmt.Errorf("invalid CAST_CALLDATA format: %s", castCallData)
+	}
+
+	funcSig := parts[1]
+	funcArgs := parts[2:]
+
+	// Use cast to generate the actual call data
+	castArgs := []string{"calldata", funcSig}
+
+	// Only add arguments if they exist
+	if len(funcArgs) > 0 && funcArgs[0] != "" {
+		castArgs = append(castArgs, funcArgs...)
+	}
+
+	cmd := exec.Command("cast", castArgs...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate call data with cast: %w, output: %s", err, string(output))
+	}
+
+	return strings.TrimSpace(string(output)), nil
 }

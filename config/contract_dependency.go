@@ -28,19 +28,24 @@ type PostDeployment struct {
 }
 
 type ContractConfig struct {
-	Name            string          `json:"name"`
-	ProjectType     string          `json:"project_type"`
-	GitURL          string          `json:"git_url"`
-	GitRef          string          `json:"git_ref"`
-	MainContract    string          `json:"main_contract"`
-	ContractPath    string          `json:"contract_path"`
-	ConstructorArgs []string        `json:"constructor_args"`
-	Dependencies    []string        `json:"dependencies,omitempty"`
-	PostDeployment  *PostDeployment `json:"post_deployment,omitempty"`
+	Name            string            `json:"name"`
+	ProjectType     string            `json:"project_type"`
+	GitURL          string            `json:"git_url"`
+	GitRef          string            `json:"git_ref"`
+	MainContract    string            `json:"main_contract"`
+	ContractPath    string            `json:"contract_path"`
+	ConstructorArgs []string          `json:"constructor_args"`
+	Dependencies    []string          `json:"dependencies,omitempty"`
+	PostDeployment  *PostDeployment   `json:"post_deployment,omitempty"`
+	Environment     map[string]string `json:"environment,omitempty"`
+	DeployScript    string            `json:"deploy_script,omitempty"`
+	ScriptDir       string            `json:"script_dir,omitempty"`
+	CloneCommands   []string          `json:"clone_commands,omitempty"`
 }
 
 type ContractsConfig struct {
-	Contracts []ContractConfig `json:"contracts"`
+	Environment map[string]string `json:"environment,omitempty"`
+	Contracts   []ContractConfig  `json:"contracts"`
 }
 
 type DeploymentRecord struct {
@@ -92,21 +97,116 @@ func ResolveDependencies(contract ContractConfig, deployments []DeploymentRecord
 	resolvedArgs := make([]string, len(contract.ConstructorArgs))
 
 	for i, arg := range contract.ConstructorArgs {
-		if strings.HasPrefix(arg, "${") && strings.HasSuffix(arg, "}") {
-			contractName := arg[2 : len(arg)-1]
+		resolved := arg
 
+		// Handle special encoded init data for proxy contracts
+		if arg == "__ENCODED_INIT_DATA__" {
+			initData, err := generateInitializeCallData(contract)
+			if err != nil {
+				return nil, fmt.Errorf("failed to generate init data: %w", err)
+			}
+			resolved = initData
+		} else if arg == "__ENCODED_INIT_DATA_REGISTRY__" {
+			// Special case for ServiceProviderRegistry
+			contractCopy := contract
+			contractCopy.Name = "ServiceProviderRegistry"
+			initData, err := generateInitializeCallData(contractCopy)
+			if err != nil {
+				return nil, fmt.Errorf("failed to generate registry init data: %w", err)
+			}
+			resolved = initData
+		} else if strings.HasPrefix(arg, "${") && strings.HasSuffix(arg, "}") {
+			// Handle ${ContractName} format (legacy)
+			contractName := arg[2 : len(arg)-1]
 			address := findContractAddress(contractName, deployments)
 			if address == "" {
 				return nil, fmt.Errorf("dependency contract %s not found in deployments", contractName)
 			}
-
-			resolvedArgs[i] = address
-		} else {
-			resolvedArgs[i] = arg
+			resolved = address
+		} else if strings.Contains(arg, "{address:") {
+			// Handle {address:ContractName} format (new)
+			resolved = resolveAddressPlaceholders(arg, deployments)
+			if strings.Contains(resolved, "{address:") {
+				// Still contains unresolved placeholders
+				return nil, fmt.Errorf("unresolved address placeholder in argument: %s", arg)
+			}
+		} else if strings.Contains(arg, "{env:") {
+			// Handle {env:VARIABLE} format for environment variables
+			resolved = resolveEnvPlaceholders(arg)
+			if strings.Contains(resolved, "{env:") {
+				// Still contains unresolved placeholders
+				return nil, fmt.Errorf("unresolved environment placeholder in argument: %s", arg)
+			}
 		}
+
+		resolvedArgs[i] = resolved
 	}
 
 	return resolvedArgs, nil
+}
+
+// resolveAddressPlaceholders resolves {address:ContractName} placeholders in a string
+func resolveAddressPlaceholders(input string, deployments []DeploymentRecord) string {
+	result := input
+
+	// Handle multiple placeholders in a single string
+	for {
+		start := strings.Index(result, "{address:")
+		if start == -1 {
+			break
+		}
+
+		end := strings.Index(result[start:], "}")
+		if end == -1 {
+			break
+		}
+		end += start
+
+		placeholder := result[start : end+1]
+		contractName := placeholder[9 : len(placeholder)-1] // Extract from {address: to }
+
+		address := findContractAddress(contractName, deployments)
+		if address == "" {
+			// Leave unresolved for error handling
+			break
+		}
+
+		result = strings.Replace(result, placeholder, address, 1)
+	}
+
+	return result
+}
+
+// resolveEnvPlaceholders resolves {env:VARIABLE} placeholders in a string
+func resolveEnvPlaceholders(input string) string {
+	result := input
+
+	// Handle multiple placeholders in a single string
+	for {
+		start := strings.Index(result, "{env:")
+		if start == -1 {
+			break
+		}
+
+		end := strings.Index(result[start:], "}")
+		if end == -1 {
+			break
+		}
+		end += start
+
+		placeholder := result[start : end+1]
+		envVar := placeholder[5 : len(placeholder)-1] // Extract from {env: to }
+
+		value := os.Getenv(envVar)
+		if value == "" {
+			// Leave unresolved for error handling
+			break
+		}
+
+		result = strings.Replace(result, placeholder, value, 1)
+	}
+
+	return result
 }
 
 // ValidateDependencies checks if all required dependencies are deployed
@@ -307,4 +407,111 @@ func parsePrivateKey(privateKeyStr string) (*ecdsa.PrivateKey, error) {
 	}
 
 	return privateKey, nil
+}
+
+// SetEnvironmentVariables sets environment variables from the global and contract-specific configurations
+func (c *ContractsConfig) SetEnvironmentVariables(contractName string, deployments []DeploymentRecord) {
+	// Set global environment variables first
+	for key, value := range c.Environment {
+		resolvedValue := c.ResolveAddressPlaceholdersWithDeployments(value, deployments)
+		os.Setenv(key, resolvedValue)
+	}
+
+	// Find contract-specific environment variables and set them
+	for _, contract := range c.Contracts {
+		if contract.Name == contractName {
+			for key, value := range contract.Environment {
+				// Resolve address placeholders if any
+				resolvedValue := c.ResolveAddressPlaceholdersWithDeployments(value, deployments)
+				os.Setenv(key, resolvedValue)
+			}
+			break
+		}
+	}
+}
+
+// ResolveAddressPlaceholders resolves {address:ContractName} placeholders in environment values
+func (c *ContractsConfig) ResolveAddressPlaceholders(value string) string {
+	// Simple placeholder resolution - replace {address:ContractName} with actual addresses
+	// This would need to read from deployments.json or be called after deployment
+	if strings.Contains(value, "{address:") {
+		// For now, return as-is - this should be called after contracts are deployed
+		// and have access to the deployment records
+		return value
+	}
+	return value
+}
+
+// ResolveAddressPlaceholdersWithDeployments resolves {address:ContractName} placeholders using deployment records
+func (c *ContractsConfig) ResolveAddressPlaceholdersWithDeployments(value string, deployments []DeploymentRecord) string {
+	return resolveAddressPlaceholders(value, deployments)
+}
+
+// UpdateEnvironmentWithDeployments updates environment variables with resolved contract addresses
+func (c *ContractsConfig) UpdateEnvironmentWithDeployments(contractName string, deployments []DeploymentRecord) {
+	env := c.GetEnvironmentForContract(contractName)
+
+	for key, value := range env {
+		resolvedValue := c.ResolveAddressPlaceholdersWithDeployments(value, deployments)
+		if resolvedValue != value {
+			fmt.Printf("  Resolved %s: %s -> %s\n", key, value, resolvedValue)
+			os.Setenv(key, resolvedValue)
+		}
+	}
+}
+
+// GetEnvironmentForContract returns the merged environment variables for a specific contract
+func (c *ContractsConfig) GetEnvironmentForContract(contractName string) map[string]string {
+	env := make(map[string]string)
+
+	// Start with global environment
+	for key, value := range c.Environment {
+		env[key] = value
+	}
+
+	// Override with contract-specific environment
+	for _, contract := range c.Contracts {
+		if contract.Name == contractName {
+			for key, value := range contract.Environment {
+				env[key] = value
+			}
+			break
+		}
+	}
+
+	return env
+}
+
+// generateInitializeCallData creates the encoded function call data for proxy initialization
+func generateInitializeCallData(contract ContractConfig) (string, error) {
+	// For ServiceProviderRegistry, we need to generate: initialize()
+	if contract.Name == "ServiceProviderRegistry" {
+		// ServiceProviderRegistry initialize() takes no parameters
+		return "CAST_CALLDATA:initialize()", nil
+	}
+
+	// For FilecoinWarmStorageService, we need to generate:
+	// initialize(uint64,uint256,address,string,string)
+	if contract.Name == "FilecoinWarmStorageService" {
+		// Get the values from environment
+		maxProvingPeriod := getEnvValue(contract, "MAX_PROVING_PERIOD", "60")
+		challengeWindowSize := getEnvValue(contract, "CHALLENGE_WINDOW_SIZE", "30")
+		filBeamController := getEnvValue(contract, "FILBEAM_CONTROLLER_ADDRESS", "0x0000000000000000000000000000000000000000")
+		serviceName := getEnvValue(contract, "SERVICE_NAME", "DevNet WarmStorage Service")
+		serviceDescription := getEnvValue(contract, "SERVICE_DESCRIPTION", "Filecoin WarmStorage service for local devnet testing")
+
+		// Build the function signature and encode the call data
+		// For now, we'll return a placeholder that indicates we need special handling
+		// This will be processed later during deployment using the actual cast tool
+		return fmt.Sprintf("CAST_CALLDATA:initialize(uint64,uint256,address,string,string):%s:%s:%s:\"%s\":\"%s\"",
+			maxProvingPeriod, challengeWindowSize, filBeamController, serviceName, serviceDescription), nil
+	}
+
+	return "", fmt.Errorf("init data generation not implemented for contract: %s", contract.Name)
+} // Helper functions for encoding
+func getEnvValue(contract ContractConfig, key, defaultValue string) string {
+	if val, exists := contract.Environment[key]; exists {
+		return val
+	}
+	return defaultValue
 }

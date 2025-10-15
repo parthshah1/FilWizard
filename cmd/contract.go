@@ -413,6 +413,44 @@ func generateABIFromSolidity(solPath, contractName, outputPath string) (string, 
 	return generatedAbi, nil
 }
 
+func compileWithSolc(contractPath string) error {
+	if _, err := exec.LookPath("solc"); err != nil {
+		return fmt.Errorf("solc not found in PATH")
+	}
+
+	fmt.Printf("Compiling %s with solc...\n", contractPath)
+
+	cmd := exec.Command("solc", "--bin", "--abi", "--optimize", contractPath, "-o", "contracts/", "--overwrite")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("solc compilation failed: %w", err)
+	}
+
+	fmt.Println("Compilation successful")
+	return nil
+}
+
+func compileWithForge() error {
+	if _, err := exec.LookPath("forge"); err != nil {
+		return fmt.Errorf("forge not found in PATH")
+	}
+
+	fmt.Println("Compiling contracts with forge...")
+
+	cmd := exec.Command("forge", "build")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("forge build failed: %w", err)
+	}
+
+	fmt.Println("Compilation successful")
+	return nil
+}
+
 func getForgeABI(contractPath, contractName, contractsDir string) (string, error) {
 	cmd := exec.Command("forge", "inspect", contractPath, contractName, "abi")
 	output, err := cmd.CombinedOutput()
@@ -460,6 +498,10 @@ var ContractCmd = &cli.Command{
 					Name:  "bindings",
 					Usage: "Generate Go bindings using abigen and save to disk",
 				},
+				&cli.BoolFlag{
+					Name:  "compile",
+					Usage: "Compile contract before deployment using solc",
+				},
 				&cli.StringFlag{
 					Name:  "workspace",
 					Usage: "Workspace directory for saving deployment artifacts",
@@ -484,9 +526,16 @@ var ContractCmd = &cli.Command{
 				deployer := c.String("deployer")
 				fundAmount := c.String("fund")
 				generateBindings := c.Bool("bindings")
+				shouldCompile := c.Bool("compile")
 				workspace := c.String("workspace")
 				contractName := c.String("contract-name")
 				abiPath := c.String("abi")
+
+				if shouldCompile {
+					if err := compileWithSolc(contractFile); err != nil {
+						return fmt.Errorf("compilation failed: %w", err)
+					}
+				}
 
 				return DeployContract(ctx, contractFile, deployer, fundAmount, generateBindings, workspace, contractName, abiPath)
 			},
@@ -591,6 +640,7 @@ var ContractCmd = &cli.Command{
 						MainContract    string   `json:"main_contract"`
 						ContractPath    string   `json:"contract_path"`
 						ConstructorArgs []string `json:"constructor_args"`
+						CloneCommands   []string `json:"clone_commands,omitempty"`
 					} `json:"contracts"`
 				}
 
@@ -604,14 +654,15 @@ var ContractCmd = &cli.Command{
 					name := strings.ToLower(cdef.Name)
 					name = strings.ReplaceAll(name, " ", "-")
 					project := &ContractProject{
-						Name:         cdef.Name,
-						GitURL:       cdef.GitURL,
-						GitRef:       cdef.GitRef,
-						ProjectType:  ProjectType(cdef.ProjectType),
-						MainContract: cdef.MainContract,
-						ContractPath: cdef.ContractPath,
-						CloneDir:     filepath.Join(name),
-						Env:          make(map[string]string),
+						Name:          cdef.Name,
+						GitURL:        cdef.GitURL,
+						GitRef:        cdef.GitRef,
+						ProjectType:   ProjectType(cdef.ProjectType),
+						MainContract:  cdef.MainContract,
+						ContractPath:  cdef.ContractPath,
+						CloneDir:      filepath.Join(name),
+						Env:           make(map[string]string),
+						CloneCommands: cdef.CloneCommands,
 					}
 
 					fmt.Printf("Cloning %s into workspace...\n", project.GitURL)
@@ -655,6 +706,14 @@ var ContractCmd = &cli.Command{
 				&cli.BoolFlag{
 					Name:  "bindings",
 					Usage: "Generate Go bindings using abigen and save to disk",
+				},
+				&cli.BoolFlag{
+					Name:  "compile",
+					Usage: "Compile contracts with forge before deployment",
+				},
+				&cli.StringFlag{
+					Name:  "import-output",
+					Usage: "Path to file containing custom deployment script output to import addresses from",
 				},
 			},
 			Action: deployFromLocal,
@@ -741,9 +800,15 @@ func deployFromLocal(c *cli.Context) error {
 	configPath := c.String("config")
 	workspace := c.String("workspace")
 	rpcURL := c.String("rpc-url")
-	createDeployer := c.Bool("create-deployer")
-	deployerKey := c.String("deployer-key")
 	generateBindings := c.Bool("bindings")
+	shouldCompile := c.Bool("compile")
+	importOutput := c.String("import-output")
+
+	if shouldCompile {
+		if err := compileWithForge(); err != nil {
+			return fmt.Errorf("compilation failed: %w", err)
+		}
+	}
 
 	contractsConfig, err := config.LoadContractsConfig(configPath)
 	if err != nil {
@@ -754,6 +819,21 @@ func deployFromLocal(c *cli.Context) error {
 	deployments, err := config.LoadDeploymentRecords(deploymentsPath)
 	if err != nil {
 		return fmt.Errorf("failed to load deployment records: %w", err)
+	}
+
+	// If user supplied an import-output file, import addresses into deployments.json
+	if importOutput != "" {
+		managerForImport := NewContractManager(workspace, rpcURL)
+		fmt.Printf("Importing script output from %s into %s...\n", importOutput, deploymentsPath)
+		if err := managerForImport.ImportScriptOutputToDeployments(configPath, deploymentsPath, importOutput); err != nil {
+			return fmt.Errorf("failed to import script output: %w", err)
+		}
+		// reload deployments after import
+		deployments, err = config.LoadDeploymentRecords(deploymentsPath)
+		if err != nil {
+			return fmt.Errorf("failed to reload deployment records after import: %w", err)
+		}
+		fmt.Println("Import completed and deployments reloaded.")
 	}
 
 	orderedContracts, err := config.GetDeploymentOrder(contractsConfig.Contracts)
@@ -771,7 +851,19 @@ func deployFromLocal(c *cli.Context) error {
 	fmt.Println()
 
 	manager := NewContractManager(workspace, rpcURL)
-	if createDeployer {
+
+	// Try to load existing deployer account from accounts.json
+	var deployerKey string
+	if accounts, err := loadAccounts(workspace); err == nil {
+		if deployerAccount, exists := accounts.Accounts["deployer"]; exists {
+			deployerKey = deployerAccount.PrivateKey
+			fmt.Printf("Using existing deployer account: %s\n", deployerAccount.EthAddress)
+		}
+	}
+
+	if deployerKey != "" {
+		manager.SetDeployerKey(deployerKey)
+	} else {
 		fmt.Println("Creating new deployer account...")
 		privateKey, address, err := manager.CreateDeployerAccount()
 		if err != nil {
@@ -779,11 +871,10 @@ func deployFromLocal(c *cli.Context) error {
 		}
 		fmt.Printf("Created deployer account: %s\n", address.String())
 		fmt.Printf("Private key: %s\n", privateKey)
-	} else if deployerKey != "" {
-		manager.SetDeployerKey(deployerKey)
-	} else {
-		return fmt.Errorf("either --create-deployer or --deployer-key must be provided")
 	}
+
+	// Set PRIVATE_KEY environment variable for deployment scripts
+	os.Setenv("PRIVATE_KEY", manager.GetDeployerKey())
 
 	for _, cdef := range orderedContracts {
 		name := strings.ToLower(cdef.Name)
@@ -803,6 +894,81 @@ func deployFromLocal(c *cli.Context) error {
 
 		fmt.Printf("====== Deploying %s from local clone ======\n", cdef.Name)
 
+		// Set and resolve environment variables for this contract deployment
+		fmt.Printf("Setting environment variables for %s...\n", cdef.Name)
+
+		// Start with contract-configured env values
+		envVars := contractsConfig.GetEnvironmentForContract(cdef.Name)
+
+		// Resolve placeholders using already-loaded deployments (config.DeploymentRecord)
+		for k, v := range envVars {
+			if strings.Contains(v, "{address:") {
+				resolved := contractsConfig.ResolveAddressPlaceholdersWithDeployments(v, deployments)
+				// If still unresolved, fall back to reading workspace/deployments.json which may contain
+				// the manager's DeployedContract format
+				if strings.Contains(resolved, "{address:") {
+					depsFile := filepath.Join(workspace, "deployments.json")
+					if data, err := os.ReadFile(depsFile); err == nil {
+						var mgrDeps []*DeployedContract
+						if err := json.Unmarshal(data, &mgrDeps); err == nil {
+							// try to find each placeholder and replace
+							for {
+								start := strings.Index(resolved, "{address:")
+								if start == -1 {
+									break
+								}
+								end := strings.Index(resolved[start:], "}")
+								if end == -1 {
+									break
+								}
+								end += start
+								placeholder := resolved[start : end+1]
+								name := placeholder[9 : len(placeholder)-1]
+								// lookup in mgrDeps
+								var found string
+								for _, md := range mgrDeps {
+									if strings.EqualFold(md.Name, name) {
+										if md.Address.String() != "" {
+											found = md.Address.String()
+											break
+										}
+									}
+								}
+								if found != "" {
+									resolved = strings.Replace(resolved, placeholder, found, 1)
+								} else {
+									// leave unresolved and break
+									break
+								}
+							}
+						}
+					}
+				}
+				envVars[k] = resolved
+			}
+		}
+
+		// Export resolved vars to the process environment and print them
+		if len(envVars) > 0 {
+			fmt.Printf("Environment variables:\n")
+			for key, value := range envVars {
+				// export so scripts see them
+				os.Setenv(key, value)
+				// Don't print sensitive values except for testing we'll show them
+				if strings.Contains(strings.ToLower(key), "secret") {
+					fmt.Printf("  %s=***\n", key)
+				} else {
+					fmt.Printf("  %s=%s\n", key, value)
+				}
+			}
+		}
+
+		// Also export and show PRIVATE_KEY if it's set
+		if manager.GetDeployerKey() != "" {
+			os.Setenv("PRIVATE_KEY", manager.GetDeployerKey())
+			fmt.Printf("  PRIVATE_KEY=%s\n", manager.GetDeployerKey())
+		}
+
 		deployments, err = config.LoadDeploymentRecords(deploymentsPath)
 		if err != nil {
 			return fmt.Errorf("failed to reload deployment records before resolving dependencies for %s: %w", cdef.Name, err)
@@ -818,27 +984,113 @@ func deployFromLocal(c *cli.Context) error {
 		}
 
 		project := &ContractProject{
-			Name:         cdef.Name,
-			GitURL:       cdef.GitURL,
-			GitRef:       cdef.GitRef,
-			ProjectType:  ProjectType(cdef.ProjectType),
-			MainContract: cdef.MainContract,
-			ContractPath: cdef.ContractPath,
-			CloneDir:     absLocalCloneDir,
-			Env:          make(map[string]string),
+			Name:          cdef.Name,
+			GitURL:        cdef.GitURL,
+			GitRef:        cdef.GitRef,
+			ProjectType:   ProjectType(cdef.ProjectType),
+			MainContract:  cdef.MainContract,
+			ContractPath:  cdef.ContractPath,
+			CloneDir:      absLocalCloneDir,
+			ScriptDir:     cdef.ScriptDir,
+			Env:           envVars,
+			CloneCommands: cdef.CloneCommands,
 		}
 
-		contractPath := fmt.Sprintf("%s:%s", project.ContractPath, project.MainContract)
-		deployedContract, err := manager.DeployContract(project, contractPath, resolvedArgs, generateBindings, false)
+		var deployedContract *DeployedContract
+		var scriptOutput string
 
-		if err != nil {
-			fmt.Printf("Error: failed to deploy contract %s: %v\n", cdef.Name, err)
-			continue
-		}
+		if cdef.DeployScript != "" {
+			// Ensure clone commands are executed (e.g., git submodule init)
+			if err := manager.EnsureCloneCommandsExecuted(project); err != nil {
+				fmt.Printf("Warning: failed to ensure clone commands for %s: %v\n", cdef.Name, err)
+			}
 
-		deployments, err = config.LoadDeploymentRecords(deploymentsPath)
-		if err != nil {
-			return fmt.Errorf("failed to reload deployment records: %w", err)
+			fmt.Printf("Running custom deployment script: %s\n", cdef.DeployScript)
+			var err error
+			scriptOutput, err = manager.RunCustomDeployScript(project, cdef.DeployScript)
+			scriptFailed := err != nil
+			if scriptFailed {
+				fmt.Printf("Warning: deployment script for %s exited with error: %v\n", cdef.Name, err)
+				fmt.Printf("Attempting to import any contract addresses that were successfully deployed...\n")
+			} else {
+				fmt.Printf("Custom deployment script completed successfully\n")
+			}
+
+			// Import addresses from script output even if script failed
+			// (scripts may fail on final steps but still deploy successfully)
+			if scriptOutput != "" {
+				// Write script output to a temporary file for importing
+				tempFile, err := os.CreateTemp("", "script_output_*.txt")
+				if err != nil {
+					fmt.Printf("Error: failed to create temp file for script output: %v\n", err)
+					if scriptFailed {
+						continue
+					}
+				} else {
+					defer os.Remove(tempFile.Name())
+					defer tempFile.Close()
+
+					if _, err := tempFile.WriteString(scriptOutput); err != nil {
+						fmt.Printf("Error: failed to write script output to temp file: %v\n", err)
+						if scriptFailed {
+							continue
+						}
+					} else {
+						tempFile.Close()
+
+						// Import addresses from script output
+						fmt.Printf("Importing contract addresses from script output...\n")
+						if err := manager.ImportScriptOutputToDeployments(configPath, deploymentsPath, tempFile.Name()); err != nil {
+							fmt.Printf("Error: failed to import script output: %v\n", err)
+							if scriptFailed {
+								continue
+							}
+						} else {
+							fmt.Printf("Successfully imported contract addresses\n")
+						}
+					}
+				}
+			}
+
+			if scriptFailed {
+				continue
+			}
+
+			// Reload deployments to get the imported contract
+			deploymentsFromManager, err := manager.LoadDeployments()
+			if err != nil {
+				fmt.Printf("Error: failed to reload deployments after script import: %v\n", err)
+				continue
+			}
+
+			// Find the deployed contract in the updated deployments
+			for _, d := range deploymentsFromManager {
+				if strings.EqualFold(d.Name, cdef.Name) {
+					deployedContract = d
+					break
+				}
+			}
+			if deployedContract == nil {
+				fmt.Printf("Warning: contract %s not found in deployments after script execution\n", cdef.Name)
+				// Create a dummy deployed contract for post-deployment steps
+				deployedContract = &DeployedContract{
+					Name: cdef.Name,
+				}
+			}
+		} else {
+			contractPath := fmt.Sprintf("%s:%s", project.ContractPath, project.MainContract)
+			var err error
+			deployedContract, err = manager.DeployContract(project, contractPath, resolvedArgs, generateBindings, false)
+
+			if err != nil {
+				fmt.Printf("Error: failed to deploy contract %s: %v\n", cdef.Name, err)
+				continue
+			}
+
+			deployments, err = config.LoadDeploymentRecords(deploymentsPath)
+			if err != nil {
+				return fmt.Errorf("failed to reload deployment records: %w", err)
+			}
 		}
 
 		fmt.Printf("\nContract %s deployed successfully!\n", cdef.Name)
@@ -852,6 +1104,16 @@ func deployFromLocal(c *cli.Context) error {
 		if deployedContract.BindingsPath != "" {
 			fmt.Printf("Go Bindings: %s\n", deployedContract.BindingsPath)
 		}
+
+		// Update environment variables with newly deployed contract addresses
+		deployments, err = config.LoadDeploymentRecords(deploymentsPath)
+		if err != nil {
+			fmt.Printf("Warning: failed to reload deployments for environment update: %v\n", err)
+		} else {
+			fmt.Printf("Updating environment variables with new contract addresses...\n")
+			contractsConfig.UpdateEnvironmentWithDeployments(cdef.Name, deployments)
+		}
+
 		fmt.Printf("====== Finished %s ======\n\n", cdef.Name)
 
 		if err := config.ExecutePostDeployment(cdef, deployedContract.Address.String(), convertToDeploymentRecords(deployments), rpcURL, manager.GetDeployerKey()); err != nil {
@@ -946,7 +1208,7 @@ func deployFromGit(c *cli.Context) error {
 
 	if deployScript := c.String("deploy-script"); deployScript != "" {
 		fmt.Printf("Running custom deployment script: %s\n", deployScript)
-		if err := manager.RunCustomDeployScript(project, deployScript); err != nil {
+		if _, err := manager.RunCustomDeployScript(project, deployScript); err != nil {
 			return fmt.Errorf("failed to run deployment script: %w", err)
 		}
 		fmt.Printf("Custom deployment script completed successfully\n")
@@ -1080,7 +1342,7 @@ func deployWithCustomScript(c *cli.Context) error {
 
 	deployScript := c.String("deploy-script")
 	fmt.Printf("Running custom deployment script: %s\n", deployScript)
-	if err := manager.RunCustomDeployScript(project, deployScript); err != nil {
+	if _, err := manager.RunCustomDeployScript(project, deployScript); err != nil {
 		return fmt.Errorf("failed to run deployment script: %w", err)
 	}
 	fmt.Printf("Custom deployment script completed successfully\n")
