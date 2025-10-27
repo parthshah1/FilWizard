@@ -1120,7 +1120,9 @@ func deployFromLocal(c *cli.Context) error {
 			fmt.Printf("Warning: Post-deployment actions failed for %s: %v\n", cdef.Name, err)
 		}
 
-		time.Sleep(5 * time.Second)
+		// Wait longer for transaction to be mined and nonce to update
+		fmt.Printf("Waiting for transaction confirmation...\n")
+		time.Sleep(20 * time.Second)
 	}
 
 	fmt.Println("All deployments completed. Check deployments with: ./mpool-tx contract list")
