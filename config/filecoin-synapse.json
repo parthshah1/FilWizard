@@ -1,0 +1,49 @@
+{
+  "environment": {
+    "CHAIN_ID": "31415926",
+    "RPC_URL": "http://lotus-1:1234/rpc/v1"
+  },
+  "contracts": [
+    {
+      "name": "USDFC",
+      "project_type": "foundry",
+      "git_url": "https://github.com/parthshah1/ERC20.git",
+      "git_ref": "main",
+      "contract_path": "src/ERC20.sol",
+      "main_contract": "USDFC",
+      "constructor_args": [],
+      "dependencies": []
+    },
+    {
+      "name": "Multicall3",
+      "project_type": "foundry",
+      "git_url": "https://github.com/mds1/multicall3.git",
+      "git_ref": "main",
+      "contract_path": "src/Multicall3.sol",
+      "clone_commands": ["forge install"],
+      "main_contract": "Multicall3",
+      "constructor_args": [],
+      "dependencies": []
+    },
+    {
+      "name": "FilecoinWarmStorage",
+      "project_type": "foundry",
+      "git_url": "https://github.com/parthshah1/filecoin-services.git",
+      "git_ref": "main",
+      "main_contract": "FilecoinWarmStorage",
+      "constructor_args": [],
+      "dependencies": [],
+      "script_dir": "service_contracts",
+      "deploy_script": "tools/deploy-all-warm-storage.sh",
+      "clone_commands": ["git submodule update --init --recursive"],
+      "environment": {
+        "ETH_RPC_URL": "http://lotus-1:1234/rpc/v1",
+        "CHAIN": "31415926",
+        "SERVICE_NAME": "ABCD",
+        "SERVICE_DESCRIPTION": "ABCD Service",
+        "DRY_RUN": "false",
+        "USDFC_TOKEN_ADDRESS": "{address:USDFC}"
+      }
+    }
+  ]
+}
