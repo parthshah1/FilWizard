@@ -1005,6 +1005,11 @@ func deployFromLocal(c *cli.Context) error {
 				fmt.Printf("Warning: failed to ensure clone commands for %s: %v\n", cdef.Name, err)
 			}
 
+			// Wait extra time before custom script to ensure previous transactions are mined
+			// Custom scripts may deploy multiple contracts sequentially and need clean nonce state
+			fmt.Printf("Waiting 30s for previous transactions to confirm before running custom script...\n")
+			time.Sleep(30 * time.Second)
+
 			fmt.Printf("Running custom deployment script: %s\n", cdef.DeployScript)
 			var err error
 			scriptOutput, err = manager.RunCustomDeployScript(project, cdef.DeployScript)
