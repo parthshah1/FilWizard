@@ -698,8 +698,13 @@ func (cm *ContractManager) EnsureCloneCommandsExecuted(project *ContractProject)
 		return fmt.Errorf("project directory %s does not exist", project.CloneDir)
 	}
 
-	// For now, always run clone commands to ensure submodules are initialized
-	// In the future, we could add more sophisticated checks
+	// Check for marker file to see if clone commands were already executed
+	markerFile := filepath.Join(project.CloneDir, ".clone_commands_done")
+	if _, err := os.Stat(markerFile); err == nil {
+		fmt.Printf("Clone commands already executed for %s (found marker file), skipping...\n", project.Name)
+		return nil
+	}
+
 	fmt.Printf("Ensuring clone commands are executed for %s...\n", project.Name)
 
 	for i, cmdStr := range project.CloneCommands {
@@ -725,6 +730,12 @@ func (cm *ContractManager) EnsureCloneCommandsExecuted(project *ContractProject)
 		}
 
 		fmt.Printf("Clone command completed successfully\n")
+	}
+
+	// Create marker file to indicate clone commands have been executed
+	markerFile = filepath.Join(project.CloneDir, ".clone_commands_done")
+	if err := os.WriteFile(markerFile, []byte("done\n"), 0644); err != nil {
+		fmt.Printf("Warning: failed to create marker file %s: %v\n", markerFile, err)
 	}
 
 	return nil
