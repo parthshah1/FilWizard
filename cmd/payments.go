@@ -15,6 +15,9 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
+	filbig "github.com/filecoin-project/go-state-types/big"
+	lotustypes "github.com/filecoin-project/lotus/chain/types"
+	"github.com/filecoin-project/lotus/chain/types/ethtypes"
 	"github.com/urfave/cli/v2"
 )
 
@@ -69,6 +72,42 @@ var PaymentsCmd = &cli.Command{
 				},
 			},
 			Action: mintTokens,
+		},
+		{
+			Name:  "mint-private-key",
+			Usage: "Mint tokens and optionally fund FIL for a raw private key",
+			Flags: []cli.Flag{
+				&cli.StringFlag{
+					Name:     "workspace",
+					Usage:    "Workspace directory",
+					Required: true,
+				},
+				&cli.StringFlag{
+					Name:  "token",
+					Usage: "Token contract name",
+					Value: "USDFC",
+				},
+				&cli.StringFlag{
+					Name:     "private-key",
+					Usage:    "Recipient private key (hex)",
+					Required: true,
+				},
+				&cli.StringFlag{
+					Name:     "amount",
+					Usage:    "Token amount in wei",
+					Required: true,
+				},
+				&cli.StringFlag{
+					Name:  "fil",
+					Usage: "Optional FIL amount to send to the derived Filecoin address",
+					Value: "0",
+				},
+				&cli.StringFlag{
+					Name:  "minter-private-key",
+					Usage: "Override minter private key (defaults to token deployer)",
+				},
+			},
+			Action: mintAndFundPrivateKey,
 		},
 		{
 			Name:  "approve",
@@ -236,7 +275,7 @@ func mintTokens(c *cli.Context) error {
 		return err
 	}
 
-	tokenAddr, abiPath, err := findContract(deployments, tokenName)
+	tokenRecord, err := findContract(deployments, tokenName)
 	if err != nil {
 		return err
 	}
@@ -267,7 +306,7 @@ func mintTokens(c *cli.Context) error {
 		return fmt.Errorf("failed to create transactor: %w", err)
 	}
 
-	tokenABI, err := os.ReadFile(abiPath)
+	tokenABI, err := os.ReadFile(tokenRecord.ABIPath)
 	if err != nil {
 		return fmt.Errorf("failed to read ABI: %w", err)
 	}
@@ -278,7 +317,7 @@ func mintTokens(c *cli.Context) error {
 	}
 	defer client.Close()
 
-	contract := bind.NewBoundContract(common.HexToAddress(tokenAddr), parseABI(tokenABI), client, client, client)
+	contract := bind.NewBoundContract(common.HexToAddress(tokenRecord.Address), parseABI(tokenABI), client, client, client)
 
 	tx, err := contract.Transact(auth, "mint", common.HexToAddress(toAccount.EthAddress), amount)
 	if err != nil {
@@ -287,6 +326,124 @@ func mintTokens(c *cli.Context) error {
 
 	fmt.Printf("Minted %s to %s\n", amountStr, toAccount.EthAddress)
 	fmt.Printf("Tx: %s\n", tx.Hash().Hex())
+	return nil
+}
+
+func mintAndFundPrivateKey(c *cli.Context) error {
+	workspace := c.String("workspace")
+	tokenName := c.String("token")
+	recipientKey := c.String("private-key")
+	amountStr := c.String("amount")
+	filAmountStr := strings.TrimSpace(c.String("fil"))
+	minterKey := c.String("minter-private-key")
+
+	if workspace == "" {
+		return fmt.Errorf("workspace is required")
+	}
+	if tokenName == "" {
+		tokenName = "USDFC"
+	}
+	if recipientKey == "" {
+		return fmt.Errorf("private-key is required")
+	}
+	if amountStr == "" {
+		return fmt.Errorf("amount is required")
+	}
+
+	deployments, err := loadDeployments(workspace)
+	if err != nil {
+		return err
+	}
+
+	tokenRecord, err := findContract(deployments, tokenName)
+	if err != nil {
+		return err
+	}
+
+	if minterKey == "" {
+		minterKey = tokenRecord.PrivateKey
+		if minterKey == "" {
+			return fmt.Errorf("deployment record for %s is missing deployer private key; supply --minter-private-key", tokenName)
+		}
+	}
+
+	minterECDSA, err := crypto.HexToECDSA(strings.TrimPrefix(minterKey, "0x"))
+	if err != nil {
+		return fmt.Errorf("invalid minter private key: %w", err)
+	}
+
+	recipientECDSA, err := crypto.HexToECDSA(strings.TrimPrefix(recipientKey, "0x"))
+	if err != nil {
+		return fmt.Errorf("invalid recipient private key: %w", err)
+	}
+
+	tokenAmount := new(big.Int)
+	if _, ok := tokenAmount.SetString(amountStr, 10); !ok {
+		return fmt.Errorf("invalid amount: %s", amountStr)
+	}
+
+	tokenABI, err := os.ReadFile(tokenRecord.ABIPath)
+	if err != nil {
+		return fmt.Errorf("failed to read ABI: %w", err)
+	}
+
+	client, err := ethclient.Dial(cfg.RPC)
+	if err != nil {
+		return fmt.Errorf("failed to connect: %w", err)
+	}
+	defer client.Close()
+
+	auth, err := bind.NewKeyedTransactorWithChainID(minterECDSA, big.NewInt(31415926))
+	if err != nil {
+		return fmt.Errorf("failed to create transactor: %w", err)
+	}
+
+	contract := bind.NewBoundContract(common.HexToAddress(tokenRecord.Address), parseABI(tokenABI), client, client, client)
+
+	recipientEthAddr := crypto.PubkeyToAddress(recipientECDSA.PublicKey)
+
+	tx, err := contract.Transact(auth, "mint", recipientEthAddr, tokenAmount)
+	if err != nil {
+		return fmt.Errorf("mint failed: %w", err)
+	}
+
+	fmt.Printf("Minted %s wei to %s\n", amountStr, recipientEthAddr.Hex())
+	fmt.Printf("Mint transaction: %s\n", tx.Hash().Hex())
+
+	filAmountStr = strings.TrimSpace(filAmountStr)
+
+	castAddr, err := ethtypes.CastEthAddress(recipientEthAddr.Bytes())
+	if err != nil {
+		return fmt.Errorf("failed to cast Ethereum address: %w", err)
+	}
+
+	filAddr, err := castAddr.ToFilecoinAddress()
+	if err != nil {
+		return fmt.Errorf("failed to derive Filecoin address: %w", err)
+	}
+
+	fmt.Printf("Derived Ethereum address: %s\n", recipientEthAddr.Hex())
+	fmt.Printf("Derived Filecoin address: %s\n", filAddr)
+
+	if filAmountStr == "" || filAmountStr == "0" {
+		return nil
+	}
+
+	filAmount, err := filbig.FromString(filAmountStr)
+	if err != nil {
+		return fmt.Errorf("invalid FIL amount: %w", err)
+	}
+
+	fundAmount := lotustypes.BigMul(filAmount, lotustypes.NewInt(1e18))
+
+	smsg, err := FundWallet(context.Background(), filAddr, fundAmount, true)
+	if err != nil {
+		return fmt.Errorf("failed to fund wallet: %w", err)
+	}
+
+	fmt.Printf("Funded %s FIL to %s\n", filAmountStr, filAddr)
+	fmt.Printf("Funding message CID: %s\n", smsg.Cid())
+
 	return nil
 }
 
@@ -307,12 +464,12 @@ func approveTokens(c *cli.Context) error {
 		return err
 	}
 
-	tokenAddr, abiPath, err := findContract(deployments, tokenName)
+	tokenRecord, err := findContract(deployments, tokenName)
 	if err != nil {
 		return err
 	}
 
-	spenderAddr, _, err := findContract(deployments, spenderName)
+	spenderRecord, err := findContract(deployments, spenderName)
 	if err != nil {
 		return err
 	}
@@ -338,7 +495,7 @@ func approveTokens(c *cli.Context) error {
 		return fmt.Errorf("failed to create transactor: %w", err)
 	}
 
-	tokenABI, err := os.ReadFile(abiPath)
+	tokenABI, err := os.ReadFile(tokenRecord.ABIPath)
 	if err != nil {
 		return fmt.Errorf("failed to read ABI: %w", err)
 	}
@@ -349,9 +506,9 @@ func approveTokens(c *cli.Context) error {
 	}
 	defer client.Close()
 
-	contract := bind.NewBoundContract(common.HexToAddress(tokenAddr), parseABI(tokenABI), client, client, client)
+	contract := bind.NewBoundContract(common.HexToAddress(tokenRecord.Address), parseABI(tokenABI), client, client, client)
 
-	tx, err := contract.Transact(auth, "approve", common.HexToAddress(spenderAddr), amount)
+	tx, err := contract.Transact(auth, "approve", common.HexToAddress(spenderRecord.Address), amount)
 	if err != nil {
 		return fmt.Errorf("approve failed: %w", err)
 	}
@@ -377,12 +534,12 @@ func depositTokens(c *cli.Context) error {
 		return err
 	}
 
-	tokenAddr, _, err := findContract(deployments, tokenName)
+	tokenRecord, err := findContract(deployments, tokenName)
 	if err != nil {
 		return err
 	}
 
-	paymentsAddr, paymentsABIPath, err := findContract(deployments, "Payments")
+	paymentsRecord, err := findContract(deployments, "Payments")
 	if err != nil {
 		return err
 	}
@@ -408,7 +565,7 @@ func depositTokens(c *cli.Context) error {
 		return fmt.Errorf("failed to create transactor: %w", err)
 	}
 
-	paymentsABI, err := os.ReadFile(paymentsABIPath)
+	paymentsABI, err := os.ReadFile(paymentsRecord.ABIPath)
 	if err != nil {
 		return fmt.Errorf("failed to read ABI: %w", err)
 	}
@@ -419,9 +576,9 @@ func depositTokens(c *cli.Context) error {
 	}
 	defer client.Close()
 
-	contract := bind.NewBoundContract(common.HexToAddress(paymentsAddr), parseABI(paymentsABI), client, client, client)
+	contract := bind.NewBoundContract(common.HexToAddress(paymentsRecord.Address), parseABI(paymentsABI), client, client, client)
 
-	tx, err := contract.Transact(auth, "deposit", common.HexToAddress(tokenAddr), common.HexToAddress(fromAccount.EthAddress), amount)
+	tx, err := contract.Transact(auth, "deposit", common.HexToAddress(tokenRecord.Address), common.HexToAddress(fromAccount.EthAddress), amount)
 	if err != nil {
 		return fmt.Errorf("deposit failed: %w", err)
 	}
@@ -450,12 +607,12 @@ func approveOperator(c *cli.Context) error {
 		return err
 	}
 
-	tokenAddr, _, err := findContract(deployments, tokenName)
+	tokenRecord, err := findContract(deployments, tokenName)
 	if err != nil {
 		return err
 	}
 
-	paymentsAddr, paymentsABIPath, err := findContract(deployments, "Payments")
+	paymentsRecord, err := findContract(deployments, "Payments")
 	if err != nil {
 		return err
 	}
@@ -493,7 +650,7 @@ func approveOperator(c *cli.Context) error {
 		return fmt.Errorf("failed to create transactor: %w", err)
 	}
 
-	paymentsABI, err := os.ReadFile(paymentsABIPath)
+	paymentsABI, err := os.ReadFile(paymentsRecord.ABIPath)
 	if err != nil {
 		return fmt.Errorf("failed to read ABI: %w", err)
 	}
@@ -504,10 +661,10 @@ func approveOperator(c *cli.Context) error {
 	}
 	defer client.Close()
 
-	contract := bind.NewBoundContract(common.HexToAddress(paymentsAddr), parseABI(paymentsABI), client, client, client)
+	contract := bind.NewBoundContract(common.HexToAddress(paymentsRecord.Address), parseABI(paymentsABI), client, client, client)
 
 	tx, err := contract.Transact(auth, "setOperatorApproval",
-		common.HexToAddress(tokenAddr),
+		common.HexToAddress(tokenRecord.Address),
 		common.HexToAddress(operatorAddr),
 		true,
 		rateAllowance,
@@ -556,12 +713,12 @@ func checkBalance(c *cli.Context) error {
 	isPaymentsContract := strings.EqualFold(contractName, "Payments")
 
 	if isPaymentsContract {
-		paymentsAddr, paymentsABIPath, err := findContract(deployments, "Payments")
+		paymentsRecord, err := findContract(deployments, "Payments")
 		if err != nil {
 			return err
 		}
 
-		abiData, err := os.ReadFile(paymentsABIPath)
+		abiData, err := os.ReadFile(paymentsRecord.ABIPath)
 		if err != nil {
 			return fmt.Errorf("failed to read ABI: %w", err)
 		}
@@ -573,7 +730,7 @@ func checkBalance(c *cli.Context) error {
 			return fmt.Errorf("failed to pack accountBalances call: %w", err)
 		}
 
-		paymentsAddress := common.HexToAddress(paymentsAddr)
+		paymentsAddress := common.HexToAddress(paymentsRecord.Address)
 		result, err := client.CallContract(context.Background(), ethereum.CallMsg{
 			To:   &paymentsAddress,
 			Data: data,
@@ -589,7 +746,7 @@ func checkBalance(c *cli.Context) error {
 		}
 
 		fmt.Printf("Account: %s (%s)\n", accountRole, account.EthAddress)
-		fmt.Printf("Payments Contract: %s\n", paymentsAddr)
+		fmt.Printf("Payments Contract: %s\n", paymentsRecord.Address)
 		fmt.Printf("Balance in Payments: %s wei\n", balance.String())
 
 		balanceFloat := new(big.Float).SetInt(balance)
@@ -601,12 +758,12 @@ func checkBalance(c *cli.Context) error {
 	}
 
 	// Check token balance
-	tokenAddr, tokenABIPath, err := findContract(deployments, contractName)
+	tokenRecord, err := findContract(deployments, contractName)
 	if err != nil {
 		return err
 	}
 
-	abiData, err := os.ReadFile(tokenABIPath)
+	abiData, err := os.ReadFile(tokenRecord.ABIPath)
 	if err != nil {
 		return fmt.Errorf("failed to read ABI: %w", err)
 	}
@@ -618,7 +775,7 @@ func checkBalance(c *cli.Context) error {
 		return fmt.Errorf("failed to pack balanceOf call: %w", err)
 	}
 
-	tokenAddress := common.HexToAddress(tokenAddr)
+	tokenAddress := common.HexToAddress(tokenRecord.Address)
 	result, err := client.CallContract(context.Background(), ethereum.CallMsg{
 		To:   &tokenAddress,
 		Data: data,
@@ -634,7 +791,7 @@ func checkBalance(c *cli.Context) error {
 	}
 
 	fmt.Printf("Account: %s (%s)\n", accountRole, account.EthAddress)
-	fmt.Printf("Token: %s (%s)\n", contractName, tokenAddr)
+	fmt.Printf("Token: %s (%s)\n", contractName, tokenRecord.Address)
 	fmt.Printf("Balance: %s wei\n", balance.String())
 
 	balanceFloat := new(big.Float).SetInt(balance)
@@ -685,13 +842,13 @@ func loadAccounts(workspace string) (*AccountsFile, error) {
 	return &accounts, nil
 }
 
-func findContract(deployments []DeploymentRecord, name string) (string, string, error) {
-	for _, d := range deployments {
-		if d.Name == name {
-			return d.Address, d.ABIPath, nil
+func findContract(deployments []DeploymentRecord, name string) (*DeploymentRecord, error) {
+	for i := range deployments {
+		if deployments[i].Name == name {
+			return &deployments[i], nil
 		}
 	}
-	return "", "", fmt.Errorf("contract '%s' not found", name)
+	return nil, fmt.Errorf("contract '%s' not found", name)
 }
 
 func parseABI(abiJSON []byte) abi.ABI {

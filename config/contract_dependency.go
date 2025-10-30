@@ -41,6 +41,7 @@ type ContractConfig struct {
 	DeployScript    string            `json:"deploy_script,omitempty"`
 	ScriptDir       string            `json:"script_dir,omitempty"`
 	CloneCommands   []string          `json:"clone_commands,omitempty"`
+	Exports         map[string]string `json:"exports,omitempty"`
 }
 
 type ContractsConfig struct {
@@ -139,6 +140,18 @@ func ResolveDependencies(contract ContractConfig, deployments []DeploymentRecord
 			}
 		}
 
+		if strings.Contains(resolved, "{deployment:") {
+			var err error
+			resolved, err = resolveDeploymentPlaceholders(resolved, deployments)
+			if err != nil {
+				return nil, err
+			}
+
+			if strings.Contains(resolved, "{deployment:") {
+				return nil, fmt.Errorf("unresolved deployment placeholder in argument: %s", arg)
+			}
+		}
+
 		resolvedArgs[i] = resolved
 	}
 
@@ -209,6 +222,58 @@ func resolveEnvPlaceholders(input string) string {
 	return result
 }
 
+func resolveDeploymentPlaceholders(input string, deployments []DeploymentRecord) (string, error) {
+	result := input
+
+	for {
+		start := strings.Index(result, "{deployment:")
+		if start == -1 {
+			break
+		}
+
+		end := strings.Index(result[start:], "}")
+		if end == -1 {
+			break
+		}
+		end += start
+
+		placeholder := result[start : end+1]
+		content := placeholder[len("{deployment:") : len(placeholder)-1]
+		parts := strings.Split(content, ":")
+		if len(parts) != 2 {
+			return "", fmt.Errorf("invalid deployment placeholder: %s", placeholder)
+		}
+
+		contractName := parts[0]
+		field := strings.ToLower(parts[1])
+
+		record := findDeploymentRecord(deployments, contractName)
+		if record == nil {
+			return "", fmt.Errorf("deployment record for %s not found", contractName)
+		}
+
+		var value string
+		switch field {
+		case "deployer_private_key":
+			value = record.DeployerPrivateKey
+		case "deployer_address":
+			value = record.DeployerAddress
+		case "address":
+			value = record.Address
+		default:
+			return "", fmt.Errorf("unsupported deployment placeholder field: %s", field)
+		}
+
+		if value == "" {
+			return "", fmt.Errorf("empty value for placeholder %s", placeholder)
+		}
+
+		result = strings.Replace(result, placeholder, value, 1)
+	}
+
+	return result, nil
+}
+
 // ValidateDependencies checks if all required dependencies are deployed
 func ValidateDependencies(contract ContractConfig, deployments []DeploymentRecord) error {
 	for _, dep := range contract.Dependencies {
@@ -257,11 +322,20 @@ func GetDeploymentOrder(contracts []ContractConfig) ([]ContractConfig, error) {
 
 func findContractAddress(name string, deployments []DeploymentRecord) string {
 	for _, deployment := range deployments {
-		if deployment.Name == name {
+		if strings.EqualFold(deployment.Name, name) {
 			return deployment.Address
 		}
 	}
 	return ""
+}
+
+func findDeploymentRecord(deployments []DeploymentRecord, name string) *DeploymentRecord {
+	for i := range deployments {
+		if strings.EqualFold(deployments[i].Name, name) {
+			return &deployments[i]
+		}
+	}
+	return nil
 }
 
 func ExecutePostDeployment(contract ContractConfig, contractAddress string, deployments []DeploymentRecord, rpcURL, privateKey string) error {
@@ -340,9 +414,16 @@ func convertArguments(args, types []string) ([]interface{}, error) {
 }
 
 func convertArgument(arg, argType string) (interface{}, error) {
-	switch argType {
+	switch strings.ToLower(argType) {
 	case "address":
 		return common.HexToAddress(arg), nil
+	case "address_from_private_key", "privatekey_address", "address-private-key":
+		pk, err := parsePrivateKey(arg)
+		if err != nil {
+			return nil, fmt.Errorf("invalid private key: %w", err)
+		}
+		addr := crypto.PubkeyToAddress(pk.PublicKey)
+		return addr, nil
 	case "uint256", "uint":
 		value, ok := new(big.Int).SetString(arg, 0)
 		if !ok {
@@ -418,14 +499,16 @@ func (c *ContractsConfig) SetEnvironmentVariables(contractName string, deploymen
 	}
 
 	// Find contract-specific environment variables and set them
-	for _, contract := range c.Contracts {
-		if contract.Name == contractName {
-			for key, value := range contract.Environment {
-				// Resolve address placeholders if any
-				resolvedValue := c.ResolveAddressPlaceholdersWithDeployments(value, deployments)
-				os.Setenv(key, resolvedValue)
+	if contract := c.GetContractByName(contractName); contract != nil {
+		for key, value := range contract.Environment {
+			// Resolve address placeholders if any
+			resolvedValue := c.ResolveAddressPlaceholdersWithDeployments(value, deployments)
+			os.Setenv(key, resolvedValue)
+		}
+		for exportName, target := range contract.Exports {
+			if resolvedValue, err := resolveExportValue(target, contractName, deployments); err == nil {
+				os.Setenv(exportName, resolvedValue)
 			}
-			break
 		}
 	}
 }
@@ -458,6 +541,18 @@ func (c *ContractsConfig) UpdateEnvironmentWithDeployments(contractName string, 
 			os.Setenv(key, resolvedValue)
 		}
 	}
+
+	if contract := c.GetContractByName(contractName); contract != nil && len(contract.Exports) > 0 {
+		for exportName, target := range contract.Exports {
+			resolvedValue, err := resolveExportValue(target, contractName, deployments)
+			if err != nil {
+				fmt.Printf("  Warning: failed to resolve export %s for %s: %v\n", exportName, contractName, err)
+				continue
+			}
+			os.Setenv(exportName, resolvedValue)
+			fmt.Printf("  Exported %s=%s\n", exportName, resolvedValue)
+		}
+	}
 }
 
 // GetEnvironmentForContract returns the merged environment variables for a specific contract
@@ -480,6 +575,46 @@ func (c *ContractsConfig) GetEnvironmentForContract(contractName string) map[str
 	}
 
 	return env
+}
+
+// GetContractByName returns the contract configuration for a given name if it exists
+func (c *ContractsConfig) GetContractByName(contractName string) *ContractConfig {
+	for i := range c.Contracts {
+		if c.Contracts[i].Name == contractName {
+			return &c.Contracts[i]
+		}
+	}
+	return nil
+}
+
+func resolveExportValue(target string, currentContract string, deployments []DeploymentRecord) (string, error) {
+	trimmed := strings.TrimSpace(target)
+	if trimmed == "" {
+		return "", fmt.Errorf("empty export target")
+	}
+
+	if strings.EqualFold(trimmed, "self") {
+		trimmed = currentContract
+	}
+
+	if strings.Contains(trimmed, "{address:") {
+		resolved := resolveAddressPlaceholders(trimmed, deployments)
+		if strings.Contains(resolved, "{address:") {
+			return "", fmt.Errorf("unresolved address placeholder: %s", target)
+		}
+		return resolved, nil
+	}
+
+	if common.IsHexAddress(trimmed) {
+		return common.HexToAddress(trimmed).Hex(), nil
+	}
+
+	address := findContractAddress(trimmed, deployments)
+	if address == "" {
+		return "", fmt.Errorf("contract %s not found in deployments", trimmed)
+	}
+
+	return address, nil
 }
 
 // generateInitializeCallData creates the encoded function call data for proxy initialization

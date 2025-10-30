@@ -80,6 +80,7 @@ func NewApp() *cli.App {
 			ContractCmd,
 			PropertiesCmd,
 			AccountsCmd,
+			PaymentsCmd,
 		},
 	}
 	return app
