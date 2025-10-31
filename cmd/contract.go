@@ -633,14 +633,15 @@ var ContractCmd = &cli.Command{
 
 				var cfg struct {
 					Contracts []struct {
-						Name            string   `json:"name"`
-						ProjectType     string   `json:"project_type"`
-						GitURL          string   `json:"git_url"`
-						GitRef          string   `json:"git_ref"`
-						MainContract    string   `json:"main_contract"`
-						ContractPath    string   `json:"contract_path"`
-						ConstructorArgs []string `json:"constructor_args"`
-						CloneCommands   []string `json:"clone_commands,omitempty"`
+						Name             string   `json:"name"`
+						ProjectType      string   `json:"project_type"`
+						GitURL           string   `json:"git_url"`
+						GitRef           string   `json:"git_ref"`
+						MainContract     string   `json:"main_contract"`
+						ContractPath     string   `json:"contract_path"`
+						ConstructorArgs  []string `json:"constructor_args"`
+						CloneCommands    []string `json:"clone_commands,omitempty"`
+						GenerateBindings bool     `json:"generate_bindings,omitempty"`
 					} `json:"contracts"`
 				}
 
@@ -654,15 +655,16 @@ var ContractCmd = &cli.Command{
 					name := strings.ToLower(cdef.Name)
 					name = strings.ReplaceAll(name, " ", "-")
 					project := &ContractProject{
-						Name:          cdef.Name,
-						GitURL:        cdef.GitURL,
-						GitRef:        cdef.GitRef,
-						ProjectType:   ProjectType(cdef.ProjectType),
-						MainContract:  cdef.MainContract,
-						ContractPath:  cdef.ContractPath,
-						CloneDir:      filepath.Join(name),
-						Env:           make(map[string]string),
-						CloneCommands: cdef.CloneCommands,
+						Name:             cdef.Name,
+						GitURL:           cdef.GitURL,
+						GitRef:           cdef.GitRef,
+						ProjectType:      ProjectType(cdef.ProjectType),
+						MainContract:     cdef.MainContract,
+						ContractPath:     cdef.ContractPath,
+						CloneDir:         filepath.Join(name),
+						GenerateBindings: cdef.GenerateBindings,
+						Env:              make(map[string]string),
+						CloneCommands:    cdef.CloneCommands,
 					}
 
 					fmt.Printf("Cloning %s into workspace...\n", project.GitURL)
@@ -800,7 +802,7 @@ func deployFromLocal(c *cli.Context) error {
 	configPath := c.String("config")
 	workspace := c.String("workspace")
 	rpcURL := c.String("rpc-url")
-	generateBindings := c.Bool("bindings")
+	defaultGenerateBindings := c.Bool("bindings")
 	shouldCompile := c.Bool("compile")
 	importOutput := c.String("import-output")
 
@@ -1085,7 +1087,10 @@ func deployFromLocal(c *cli.Context) error {
 		} else {
 			contractPath := fmt.Sprintf("%s:%s", project.ContractPath, project.MainContract)
 			var err error
-			deployedContract, err = manager.DeployContract(project, contractPath, resolvedArgs, generateBindings, false)
+			contractGenerateBindings := defaultGenerateBindings || cdef.GenerateBindings
+			project.GenerateBindings = contractGenerateBindings
+
+			deployedContract, err = manager.DeployContract(project, contractPath, resolvedArgs, contractGenerateBindings, false)
 
 			if err != nil {
 				fmt.Printf("Error: failed to deploy contract %s: %v\n", cdef.Name, err)

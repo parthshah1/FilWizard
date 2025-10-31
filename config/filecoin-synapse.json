@@ -13,6 +13,7 @@
       "main_contract": "USDFC",
       "constructor_args": [],
       "dependencies": [],
+      "generate_bindings": true,
       "environment": {
         "USDFC_INITIAL_MINT_AMOUNT_WEI": "10000000000000000000"
       },

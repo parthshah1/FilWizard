@@ -28,20 +28,21 @@ type PostDeployment struct {
 }
 
 type ContractConfig struct {
-	Name            string            `json:"name"`
-	ProjectType     string            `json:"project_type"`
-	GitURL          string            `json:"git_url"`
-	GitRef          string            `json:"git_ref"`
-	MainContract    string            `json:"main_contract"`
-	ContractPath    string            `json:"contract_path"`
-	ConstructorArgs []string          `json:"constructor_args"`
-	Dependencies    []string          `json:"dependencies,omitempty"`
-	PostDeployment  *PostDeployment   `json:"post_deployment,omitempty"`
-	Environment     map[string]string `json:"environment,omitempty"`
-	DeployScript    string            `json:"deploy_script,omitempty"`
-	ScriptDir       string            `json:"script_dir,omitempty"`
-	CloneCommands   []string          `json:"clone_commands,omitempty"`
-	Exports         map[string]string `json:"exports,omitempty"`
+	Name             string            `json:"name"`
+	ProjectType      string            `json:"project_type"`
+	GitURL           string            `json:"git_url"`
+	GitRef           string            `json:"git_ref"`
+	MainContract     string            `json:"main_contract"`
+	ContractPath     string            `json:"contract_path"`
+	ConstructorArgs  []string          `json:"constructor_args"`
+	Dependencies     []string          `json:"dependencies,omitempty"`
+	PostDeployment   *PostDeployment   `json:"post_deployment,omitempty"`
+	Environment      map[string]string `json:"environment,omitempty"`
+	DeployScript     string            `json:"deploy_script,omitempty"`
+	ScriptDir        string            `json:"script_dir,omitempty"`
+	CloneCommands    []string          `json:"clone_commands,omitempty"`
+	Exports          map[string]string `json:"exports,omitempty"`
+	GenerateBindings bool              `json:"generate_bindings,omitempty"`
 }
 
 type ContractsConfig struct {

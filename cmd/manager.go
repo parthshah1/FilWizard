@@ -25,17 +25,18 @@ const (
 )
 
 type ContractProject struct {
-	Name          string            `json:"name"`
-	GitURL        string            `json:"git_url"`
-	GitRef        string            `json:"git_ref,omitempty"`
-	ProjectType   ProjectType       `json:"project_type"`
-	MainContract  string            `json:"main_contract"`
-	ContractPath  string            `json:"contract_path,omitempty"`
-	CloneDir      string            `json:"clone_dir"`
-	ScriptDir     string            `json:"script_dir,omitempty"`
-	GenerateAbi   bool              `json:"generate_abi,omitempty"`
-	Env           map[string]string `json:"env"`
-	CloneCommands []string          `json:"clone_commands,omitempty"`
+	Name             string            `json:"name"`
+	GitURL           string            `json:"git_url"`
+	GitRef           string            `json:"git_ref,omitempty"`
+	ProjectType      ProjectType       `json:"project_type"`
+	MainContract     string            `json:"main_contract"`
+	ContractPath     string            `json:"contract_path,omitempty"`
+	CloneDir         string            `json:"clone_dir"`
+	ScriptDir        string            `json:"script_dir,omitempty"`
+	GenerateAbi      bool              `json:"generate_abi,omitempty"`
+	GenerateBindings bool              `json:"generate_bindings,omitempty"`
+	Env              map[string]string `json:"env"`
+	CloneCommands    []string          `json:"clone_commands,omitempty"`
 }
 
 type DeployedContract struct {
