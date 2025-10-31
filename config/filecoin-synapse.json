@@ -63,10 +63,10 @@
       "deploy_script": "tools/deploy-all-warm-storage.sh",
       "clone_commands": ["git submodule update --init --recursive"],
       "environment": {
-        "ETH_RPC_URL": "http://localhost:1234/rpc/v1",
+        "ETH_RPC_URL": "http://lotus-1:1234/rpc/v1",
         "CHAIN": "31415926",
-        "SERVICE_NAME": "ABCD",
-        "SERVICE_DESCRIPTION": "ABCD Service",
+        "SERVICE_NAME": "Synapse",
+        "SERVICE_DESCRIPTION": "Synapse Service",
         "DRY_RUN": "false",
         "USDFC_TOKEN_ADDRESS": "{address:USDFC}"
       },
