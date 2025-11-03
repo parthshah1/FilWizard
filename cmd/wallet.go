@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/filecoin-project/go-address"
 	"github.com/filecoin-project/go-state-types/abi"
@@ -62,6 +63,21 @@ func NewAccount() (*key.Key, ethtypes.EthAddress, address.Address) {
 		return nil, ethtypes.EthAddress{}, address.Address{}
 	}
 	return key, *(*ethtypes.EthAddress)(ethAddr), addr
+}
+
+func appendEthereumKeyToFile(path string, key *key.Key, ethAddr ethtypes.EthAddress, filAddr address.Address) error {
+	if key == nil {
+		return fmt.Errorf("key is nil")
+	}
+
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	_, err = fmt.Fprintf(file, "Ethereum Address: %s\nFilecoin Address: %s\nPrivate Key: 0x%x\n---\n", ethAddr.String(), filAddr.String(), key.PrivateKey)
+	return err
 }
 
 func CreateEthereumWallet(ctx context.Context, fund bool) (address.Address, error) {
@@ -149,6 +165,10 @@ var WalletCmd = &cli.Command{
 					Name:  "show-private-key",
 					Usage: "Show private key in output (for Ethereum wallets)",
 				},
+				&cli.StringFlag{
+					Name:  "key-output",
+					Usage: "File to append generated private keys (Ethereum wallets)",
+				},
 			},
 			Action: func(c *cli.Context) error {
 				ctx := context.Background()
@@ -168,6 +188,7 @@ var WalletCmd = &cli.Command{
 				}
 
 				if walletType == "ethereum" {
+					keyOutput := c.String("key-output")
 					// Create Ethereum wallets
 					fmt.Printf("Creating %d Ethereum wallet(s):\n", count)
 
@@ -183,6 +204,13 @@ var WalletCmd = &cli.Command{
 
 						if showPrivateKey {
 							fmt.Printf("  Private Key: %x\n", key.PrivateKey)
+						}
+
+						if keyOutput != "" {
+							if err := appendEthereumKeyToFile(keyOutput, key, ethAddr, filAddr); err != nil {
+								return fmt.Errorf("failed to write key to %s: %w", keyOutput, err)
+							}
+							fmt.Printf("  Saved key material to %s\n", keyOutput)
 						}
 
 						// Fund wallet if amount specified
