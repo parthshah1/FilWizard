@@ -9,6 +9,7 @@ import (
 
 	"github.com/antithesishq/antithesis-sdk-go/assert"
 	"github.com/filecoin-project/go-state-types/abi"
+	"github.com/filecoin-project/lotus/chain/types"
 )
 
 var antithesisEnabled bool
@@ -256,7 +257,7 @@ func (pc *PropertyChecker) streamNodeUpdates(ctx context.Context, client *Client
 
 			if currentHeight > lastReportedHeight {
 				fmt.Printf("Node %s advanced %d epochs: %d → %d\n",
-					nodeID, currentHeight - lastReportedHeight, lastReportedHeight, currentHeight)
+					nodeID, currentHeight-lastReportedHeight, lastReportedHeight, currentHeight)
 				lastReportedHeight = currentHeight
 			}
 		}
@@ -367,6 +368,237 @@ func (pc *PropertyChecker) CheckStateConsistency(ctx context.Context) error {
 		fmt.Printf("State consistency property satisfied across %d nodes at height %d\n", len(computeResults), targetHeight)
 	} else {
 		fmt.Printf("State consistency property failed - nodes %v produced different results\n", inconsistentNodes)
+	}
+
+	return nil
+}
+
+// CheckStateComputeConsistency verifies that all nodes produce identical StateCompute results
+// at a common height. This ensures state computation consistency across the network.
+func (pc *PropertyChecker) CheckStateComputeConsistency(ctx context.Context) error {
+	if len(pc.clients) < 2 {
+		fmt.Println("Need at least 2 clients for StateCompute consistency check")
+		return nil
+	}
+	fmt.Println("Checking StateCompute consistency property at common height...")
+
+	// First, get current heads from all nodes to find a common height
+	type nodeInfo struct {
+		client *Client
+		nodeID string
+		head   abi.ChainEpoch
+		tipset types.TipSetKey
+	}
+
+	var nodeInfos []nodeInfo
+	for i, client := range pc.clients {
+		nodeID := fmt.Sprintf("node-%d", i)
+
+		head, err := client.GetAPI().ChainHead(ctx)
+		if err != nil {
+			fmt.Printf("Failed to get head from %s: %v\n", nodeID, err)
+			continue
+		}
+
+		nodeInfos = append(nodeInfos, nodeInfo{
+			client: client,
+			nodeID: nodeID,
+			head:   head.Height(),
+			tipset: head.Key(),
+		})
+
+		fmt.Printf("Node %s at height: %d\n", nodeID, head.Height())
+	}
+
+	if len(nodeInfos) < 2 {
+		fmt.Println("Need at least 2 responsive nodes for StateCompute consistency check")
+		return fmt.Errorf("insufficient responsive nodes")
+	}
+
+	// Find the lowest height (common height all nodes have)
+	lowestHeight := nodeInfos[0].head
+	for _, info := range nodeInfos {
+		if info.head < lowestHeight {
+			lowestHeight = info.head
+		}
+	}
+
+	// Use a height that all nodes definitely have (lowest - 1 for safety)
+	targetHeight := lowestHeight - 1
+	if targetHeight < 0 {
+		targetHeight = 0
+	}
+
+	fmt.Printf("Using common height %d for StateCompute consistency check\n", targetHeight)
+
+	// Get tipset at target height from the first node to use as reference
+	referenceTipset, err := nodeInfos[0].client.GetAPI().ChainGetTipSetByHeight(ctx, targetHeight, nodeInfos[0].tipset)
+	if err != nil {
+		return fmt.Errorf("failed to get tipset at height %d from reference node: %w", targetHeight, err)
+	}
+
+	referenceTipsetKey := referenceTipset.Key()
+	fmt.Printf("Using reference tipset %s at height %d\n", referenceTipsetKey.String(), targetHeight)
+
+	// Call StateCompute on all nodes at the same height with the same tipset key
+	// This ensures we're comparing state computation for the exact same tipset across all nodes
+	var computeResults []struct {
+		nodeID    string
+		stateRoot string
+		height    abi.ChainEpoch
+	}
+
+	for _, info := range nodeInfos {
+		// Use the same reference tipset key for all nodes to ensure fair comparison
+		// If a node doesn't have this tipset, it indicates a sync issue
+		result, err := info.client.GetAPI().StateCompute(ctx, targetHeight, nil, referenceTipsetKey)
+		if err != nil {
+			fmt.Printf("Failed StateCompute on %s at height %d with tipset %s: %v\n",
+				info.nodeID, targetHeight, referenceTipsetKey.String()[:32]+"...", err)
+			continue
+		}
+
+		stateRoot := result.Root.String()
+		computeResults = append(computeResults, struct {
+			nodeID    string
+			stateRoot string
+			height    abi.ChainEpoch
+		}{
+			nodeID:    info.nodeID,
+			stateRoot: stateRoot,
+			height:    targetHeight,
+		})
+
+		fmt.Printf("Node %s: StateCompute root %s at height %d\n",
+			info.nodeID, stateRoot[:16]+"...", targetHeight)
+	}
+
+	if len(computeResults) < 2 {
+		fmt.Println("Insufficient StateCompute results for consistency check")
+		return fmt.Errorf("could not get StateCompute results from enough nodes")
+	}
+
+	// Compare all results
+	referenceResult := computeResults[0].stateRoot
+	stateConsistent := true
+	inconsistentNodes := []string{}
+
+	for i := 1; i < len(computeResults); i++ {
+		if computeResults[i].stateRoot != referenceResult {
+			inconsistentNodes = append(inconsistentNodes, computeResults[i].nodeID)
+			stateConsistent = false
+			fmt.Printf("State root mismatch: %s has %s, expected %s\n",
+				computeResults[i].nodeID, computeResults[i].stateRoot[:16]+"...", referenceResult[:16]+"...")
+		}
+	}
+
+	AssertAlways(
+		stateConsistent,
+		"All nodes should produce identical StateCompute results at common height",
+		map[string]interface{}{
+			"state_consistent":   stateConsistent,
+			"compute_height":     targetHeight,
+			"nodes_checked":      len(computeResults),
+			"inconsistent_nodes": inconsistentNodes,
+			"reference_root":     referenceResult,
+		},
+	)
+
+	if stateConsistent {
+		fmt.Printf("StateCompute consistency property satisfied across %d nodes at height %d\n",
+			len(computeResults), targetHeight)
+	} else {
+		fmt.Printf("StateCompute consistency property failed - nodes %v produced different state roots\n",
+			inconsistentNodes)
+		return fmt.Errorf("StateCompute consistency check failed")
+	}
+
+	return nil
+}
+
+// CheckFinalizedTipSetConsistency verifies that all nodes return the same finalized tipset.
+// This ensures that F3 finalization is consistent across the network.
+func (pc *PropertyChecker) CheckFinalizedTipSetConsistency(ctx context.Context) error {
+	if len(pc.clients) < 2 {
+		fmt.Println("Need at least 2 clients for finalized tipset consistency check")
+		return nil
+	}
+	fmt.Println("Checking finalized tipset consistency property using ChainGetFinalizedTipSet...")
+
+	type finalizedInfo struct {
+		nodeID string
+		tipset *types.TipSet
+		height abi.ChainEpoch
+		cid    string
+	}
+
+	var finalizedInfos []finalizedInfo
+
+	for i, client := range pc.clients {
+		nodeID := fmt.Sprintf("node-%d", i)
+
+		tipset, err := client.GetAPI().ChainGetFinalizedTipSet(ctx)
+		if err != nil {
+			fmt.Printf("Failed to get finalized tipset from %s: %v\n", nodeID, err)
+			continue
+		}
+
+		height := tipset.Height()
+		key := tipset.Key()
+		cidStr := key.String()
+
+		finalizedInfos = append(finalizedInfos, finalizedInfo{
+			nodeID: nodeID,
+			tipset: tipset,
+			height: height,
+			cid:    cidStr,
+		})
+
+		fmt.Printf("Node %s: Finalized tipset at height %d, key: %s\n",
+			nodeID, height, cidStr[:32]+"...")
+	}
+
+	if len(finalizedInfos) < 2 {
+		fmt.Println("Need at least 2 responsive nodes for finalized tipset consistency check")
+		return fmt.Errorf("insufficient responsive nodes")
+	}
+
+	// Compare all finalized tipsets
+	referenceInfo := finalizedInfos[0]
+	tipsetsConsistent := true
+	inconsistentNodes := []string{}
+
+	for i := 1; i < len(finalizedInfos); i++ {
+		info := finalizedInfos[i]
+
+		// Compare both height and tipset key (CID)
+		if info.height != referenceInfo.height || info.cid != referenceInfo.cid {
+			inconsistentNodes = append(inconsistentNodes, info.nodeID)
+			tipsetsConsistent = false
+			fmt.Printf("Finalized tipset mismatch: %s has height %d (key: %s), expected height %d (key: %s)\n",
+				info.nodeID, info.height, info.cid[:32]+"...", referenceInfo.height, referenceInfo.cid[:32]+"...")
+		}
+	}
+
+	AssertAlways(
+		tipsetsConsistent,
+		"All nodes should return the same finalized tipset",
+		map[string]interface{}{
+			"tipsets_consistent": tipsetsConsistent,
+			"finalized_height":   referenceInfo.height,
+			"finalized_tipset":   referenceInfo.cid,
+			"nodes_checked":      len(finalizedInfos),
+			"inconsistent_nodes": inconsistentNodes,
+		},
+	)
+
+	if tipsetsConsistent {
+		fmt.Printf("Finalized tipset consistency property satisfied across %d nodes at height %d\n",
+			len(finalizedInfos), referenceInfo.height)
+	} else {
+		fmt.Printf("Finalized tipset consistency property failed - nodes %v have different finalized tipsets\n",
+			inconsistentNodes)
+		return fmt.Errorf("finalized tipset consistency check failed")
 	}
 
 	return nil
