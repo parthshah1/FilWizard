@@ -297,6 +297,11 @@ var MempoolCmd = &cli.Command{
 					Name:  "wait",
 					Usage: "Wait for transaction confirmations",
 				},
+				&cli.BoolFlag{
+					Name:  "auto-create-wallets",
+					Usage: "Automatically create and fund wallets if less than 2 exist (default: true)",
+					Value: true,
+				},
 			},
 			Action: func(c *cli.Context) error {
 				ctx := context.Background()
@@ -305,6 +310,72 @@ var MempoolCmd = &cli.Command{
 				wallets, err := ListWallets(ctx)
 				if err != nil {
 					return fmt.Errorf("failed to get wallets: %w", err)
+				}
+
+				// Auto-create and fund wallets if needed
+				autoCreate := c.Bool("auto-create-wallets")
+				if len(wallets) < 2 && autoCreate {
+					concurrent := c.Int("concurrent")
+					walletsNeeded := concurrent
+					if walletsNeeded < 2 {
+						walletsNeeded = 2
+					}
+					if walletsNeeded < 10 {
+						walletsNeeded = 10 // Create at least 10 wallets for better distribution
+					}
+
+					fmt.Printf("Found %d wallet(s), need at least 2. Creating %d wallets...\n", len(wallets), walletsNeeded)
+
+					// Calculate funding amount based on refill-amount or use default
+					refillAmountStr := c.String("refill-amount")
+					var fundAmount types.BigInt
+					if refillAmountStr != "" {
+						refillAmount, _ := types.BigFromString(refillAmountStr)
+						fundAmount = types.BigMul(refillAmount, types.NewInt(1e18))
+					} else {
+						// Default: fund with 10 FIL
+						fundAmount = types.BigMul(types.NewInt(10), types.NewInt(1e18))
+					}
+
+					// Create wallets (use secp256k1 which works for both FIL and ETH)
+					createdWallets := make([]address.Address, 0, walletsNeeded)
+					for i := 0; i < walletsNeeded; i++ {
+						addr, err := CreateWallet(ctx, types.KTSecp256k1)
+						if err != nil {
+							return fmt.Errorf("failed to create wallet %d: %w", i+1, err)
+						}
+						createdWallets = append(createdWallets, addr)
+						if (i+1)%5 == 0 || i == walletsNeeded-1 {
+							fmt.Printf("Created %d/%d wallets...\n", i+1, walletsNeeded)
+						}
+					}
+
+					// Fund all created wallets
+					fmt.Printf("Funding %d wallets with %s FIL each...\n", len(createdWallets), types.BigDiv(fundAmount, types.NewInt(1e18)).String())
+					fundedCount := 0
+					for i, addr := range createdWallets {
+						_, err := FundWallet(ctx, addr, fundAmount, true)
+						if err != nil {
+							fmt.Printf("Warning: failed to fund wallet %s: %v\n", addr, err)
+							continue
+						}
+						fundedCount++
+						if (i+1)%5 == 0 || i == len(createdWallets)-1 {
+							fmt.Printf("Funded %d/%d wallets...\n", fundedCount, len(createdWallets))
+						}
+						// Small delay to avoid overwhelming the node
+						if i < len(createdWallets)-1 {
+							time.Sleep(500 * time.Millisecond)
+						}
+					}
+
+					// Reload wallets list to include newly created ones
+					wallets, err = ListWallets(ctx)
+					if err != nil {
+						return fmt.Errorf("failed to reload wallets: %w", err)
+					}
+
+					fmt.Printf("Successfully created and funded %d wallets. Total wallets: %d\n", len(createdWallets), len(wallets))
 				}
 
 				if len(wallets) < 2 {

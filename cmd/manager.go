@@ -90,31 +90,83 @@ func (cm *ContractManager) CloneRepository(project *ContractProject) error {
 		}
 	}
 
-	cmd := exec.Command("git", "clone", project.GitURL, project.CloneDir)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to clone repository: %w, output: %s", err, output)
+	// Determine which ref to checkout - use the one specified in JSON config
+	checkoutRef := project.GitRef
+	if checkoutRef == "" {
+		// If no ref specified, get default branch from remote
+		lsRemoteCmd := exec.Command("git", "ls-remote", "--symref", project.GitURL, "HEAD")
+		lsRemoteOutput, err := lsRemoteCmd.CombinedOutput()
+		if err == nil {
+			lines := strings.Split(string(lsRemoteOutput), "\n")
+			for _, line := range lines {
+				if strings.HasPrefix(line, "ref:") {
+					parts := strings.Fields(line)
+					if len(parts) >= 2 {
+						ref := parts[1]
+						if strings.HasPrefix(ref, "refs/heads/") {
+							checkoutRef = strings.TrimPrefix(ref, "refs/heads/")
+							break
+						}
+					}
+				}
+			}
+		}
+		if checkoutRef == "" {
+			checkoutRef = "main" // fallback to main
+		}
 	}
 
-	if project.GitRef != "" {
-		fmt.Printf("Checking out git reference: %s\n", project.GitRef)
-		originalDir, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("failed to get current directory: %w", err)
+	originalDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %w", err)
+	}
+	defer os.Chdir(originalDir)
+
+	// Check if directory already exists
+	if _, err := os.Stat(project.CloneDir); err == nil {
+		// Directory exists, fetch latest and checkout the ref
+		fmt.Printf("Directory %s already exists, fetching latest %s...\n", project.CloneDir, checkoutRef)
+		if err := os.Chdir(project.CloneDir); err != nil {
+			return fmt.Errorf("failed to change to project directory: %w", err)
 		}
-		defer os.Chdir(originalDir)
+	} else {
+		// Directory doesn't exist, clone fresh
+		fmt.Printf("Cloning repository: %s\n", project.GitURL)
+		cmd := exec.Command("git", "clone", project.GitURL, project.CloneDir)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to clone repository: %w, output: %s", err, output)
+		}
 
 		if err := os.Chdir(project.CloneDir); err != nil {
 			return fmt.Errorf("failed to change to project directory: %w", err)
 		}
-
-		checkoutCmd := exec.Command("git", "checkout", project.GitRef)
-		checkoutOutput, err := checkoutCmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("failed to checkout git reference '%s': %w, output: %s", project.GitRef, err, checkoutOutput)
-		}
-		fmt.Printf("Successfully checked out: %s\n", project.GitRef)
 	}
+
+	// Always fetch all refs from origin to get the latest remote state
+	fmt.Printf("Fetching all refs from origin...\n")
+	fetchAllCmd := exec.Command("git", "fetch", "origin", "--tags", "--force")
+	fetchAllOutput, err := fetchAllCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to fetch from origin: %w, output: %s", err, fetchAllOutput)
+	}
+
+	// Always checkout the latest version of the specified ref
+	fmt.Printf("Checking out latest %s...\n", checkoutRef)
+	checkoutCmd := exec.Command("git", "checkout", checkoutRef)
+	checkoutOutput, err := checkoutCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to checkout git reference '%s': %w, output: %s", checkoutRef, err, checkoutOutput)
+	}
+
+	// Reset to origin/<ref> to ensure we're on the absolute latest (works for branches)
+	// If it fails (e.g., for tags/commits), that's fine - we're already on the right commit
+	resetCmd := exec.Command("git", "reset", "--hard", fmt.Sprintf("origin/%s", checkoutRef))
+	if _, resetErr := resetCmd.CombinedOutput(); resetErr == nil {
+		fmt.Printf("Reset to latest origin/%s\n", checkoutRef)
+	}
+
+	fmt.Printf("Successfully checked out latest %s\n", checkoutRef)
 
 	// Execute clone commands if specified
 	if len(project.CloneCommands) > 0 {
