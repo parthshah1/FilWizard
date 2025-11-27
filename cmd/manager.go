@@ -151,6 +151,19 @@ func (cm *ContractManager) CloneRepository(project *ContractProject) error {
 		return fmt.Errorf("failed to fetch from origin: %w, output: %s", err, fetchAllOutput)
 	}
 
+	// Discard any local changes to ensure clean state
+	fmt.Printf("Discarding any local changes...\n")
+	resetHardCmd := exec.Command("git", "reset", "--hard", "HEAD")
+	if _, resetErr := resetHardCmd.CombinedOutput(); resetErr != nil {
+		// Non-fatal, might be on a detached HEAD or no commits yet
+		fmt.Printf("Note: Could not reset (might be expected)\n")
+	}
+	cleanCmd := exec.Command("git", "clean", "-fd")
+	if _, cleanErr := cleanCmd.CombinedOutput(); cleanErr != nil {
+		// Non-fatal
+		fmt.Printf("Note: Could not clean working directory (might be expected)\n")
+	}
+
 	// Check if the ref exists as a remote branch
 	checkBranchCmd := exec.Command("git", "ls-remote", "--heads", "origin", checkoutRef)
 	branchOutput, _ := checkBranchCmd.CombinedOutput()
@@ -161,6 +174,7 @@ func (cm *ContractManager) CloneRepository(project *ContractProject) error {
 	var checkoutCmd *exec.Cmd
 	if remoteBranchExists {
 		// For branches, force update local branch to match remote using -B flag
+		// This already puts us at origin/<ref>, so no pull needed
 		fmt.Printf("Updating local branch %s to match origin/%s...\n", checkoutRef, checkoutRef)
 		checkoutCmd = exec.Command("git", "checkout", "-B", checkoutRef, fmt.Sprintf("origin/%s", checkoutRef))
 	} else {
@@ -181,14 +195,14 @@ func (cm *ContractManager) CloneRepository(project *ContractProject) error {
 			fmt.Printf("Note: Could not set upstream tracking (may already be set)\n")
 		}
 
-		// Pull latest changes to ensure we're at HEAD
-		fmt.Printf("Pulling latest changes from origin/%s...\n", checkoutRef)
-		pullCmd := exec.Command("git", "pull", "origin", checkoutRef)
-		pullOutput, pullErr := pullCmd.CombinedOutput()
-		if pullErr != nil {
-			return fmt.Errorf("failed to pull latest changes: %w, output: %s", pullErr, pullOutput)
+		// Hard reset to origin/<ref> to ensure we're exactly at the remote HEAD
+		// This is more reliable than pull, especially if there are any local modifications
+		fmt.Printf("Resetting to origin/%s to ensure clean state...\n", checkoutRef)
+		resetToOriginCmd := exec.Command("git", "reset", "--hard", fmt.Sprintf("origin/%s", checkoutRef))
+		resetOutput, resetErr := resetToOriginCmd.CombinedOutput()
+		if resetErr != nil {
+			return fmt.Errorf("failed to reset to origin/%s: %w, output: %s", checkoutRef, resetErr, resetOutput)
 		}
-		fmt.Printf("Successfully pulled latest changes\n")
 	}
 
 	fmt.Printf("Successfully checked out latest %s\n", checkoutRef)
@@ -219,6 +233,15 @@ func (cm *ContractManager) CloneRepository(project *ContractProject) error {
 			}
 
 			fmt.Printf("Clone command completed successfully\n")
+		}
+
+		// After clone commands, clean up any untracked files but keep intentional changes
+		// Clone commands (like submodule updates) should leave the repo in a clean state
+		fmt.Printf("Cleaning untracked files after clone commands...\n")
+		cleanAfterCloneCmd := exec.Command("git", "clean", "-fd")
+		if _, cleanErr := cleanAfterCloneCmd.CombinedOutput(); cleanErr != nil {
+			// Non-fatal
+			fmt.Printf("Note: Could not clean after clone commands (might be expected)\n")
 		}
 	}
 
