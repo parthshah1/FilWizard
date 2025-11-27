@@ -180,6 +180,15 @@ func (cm *ContractManager) CloneRepository(project *ContractProject) error {
 			// Non-fatal, tracking might already be set
 			fmt.Printf("Note: Could not set upstream tracking (may already be set)\n")
 		}
+
+		// Pull latest changes to ensure we're at HEAD
+		fmt.Printf("Pulling latest changes from origin/%s...\n", checkoutRef)
+		pullCmd := exec.Command("git", "pull", "origin", checkoutRef)
+		pullOutput, pullErr := pullCmd.CombinedOutput()
+		if pullErr != nil {
+			return fmt.Errorf("failed to pull latest changes: %w, output: %s", pullErr, pullOutput)
+		}
+		fmt.Printf("Successfully pulled latest changes\n")
 	}
 
 	fmt.Printf("Successfully checked out latest %s\n", checkoutRef)
