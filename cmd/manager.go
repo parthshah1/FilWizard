@@ -151,19 +151,35 @@ func (cm *ContractManager) CloneRepository(project *ContractProject) error {
 		return fmt.Errorf("failed to fetch from origin: %w, output: %s", err, fetchAllOutput)
 	}
 
+	// Check if the ref exists as a remote branch
+	checkBranchCmd := exec.Command("git", "ls-remote", "--heads", "origin", checkoutRef)
+	branchOutput, _ := checkBranchCmd.CombinedOutput()
+	remoteBranchExists := strings.TrimSpace(string(branchOutput)) != ""
+
 	// Always checkout the latest version of the specified ref
 	fmt.Printf("Checking out latest %s...\n", checkoutRef)
-	checkoutCmd := exec.Command("git", "checkout", checkoutRef)
+	var checkoutCmd *exec.Cmd
+	if remoteBranchExists {
+		// For branches, force update local branch to match remote using -B flag
+		fmt.Printf("Updating local branch %s to match origin/%s...\n", checkoutRef, checkoutRef)
+		checkoutCmd = exec.Command("git", "checkout", "-B", checkoutRef, fmt.Sprintf("origin/%s", checkoutRef))
+	} else {
+		// For tags/commits, just checkout directly
+		checkoutCmd = exec.Command("git", "checkout", checkoutRef)
+	}
+
 	checkoutOutput, err := checkoutCmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to checkout git reference '%s': %w, output: %s", checkoutRef, err, checkoutOutput)
 	}
 
-	// Reset to origin/<ref> to ensure we're on the absolute latest (works for branches)
-	// If it fails (e.g., for tags/commits), that's fine - we're already on the right commit
-	resetCmd := exec.Command("git", "reset", "--hard", fmt.Sprintf("origin/%s", checkoutRef))
-	if _, resetErr := resetCmd.CombinedOutput(); resetErr == nil {
-		fmt.Printf("Reset to latest origin/%s\n", checkoutRef)
+	// For branches, ensure upstream tracking is set
+	if remoteBranchExists {
+		setUpstreamCmd := exec.Command("git", "branch", "--set-upstream-to", fmt.Sprintf("origin/%s", checkoutRef), checkoutRef)
+		if _, upstreamErr := setUpstreamCmd.CombinedOutput(); upstreamErr != nil {
+			// Non-fatal, tracking might already be set
+			fmt.Printf("Note: Could not set upstream tracking (may already be set)\n")
+		}
 	}
 
 	fmt.Printf("Successfully checked out latest %s\n", checkoutRef)
