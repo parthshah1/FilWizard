@@ -56,7 +56,7 @@
       "project_type": "foundry",
       "git_url": "https://github.com/parthshah1/filecoin-services.git",
       "git_ref": "main",
-      "main_contract": "filecoinwarmstorageservice",
+      "main_contract": "FilecoinWarmStorageService",
       "constructor_args": [],
       "dependencies": [],
       "script_dir": "service_contracts",
