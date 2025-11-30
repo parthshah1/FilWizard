@@ -878,7 +878,9 @@ func (cm *ContractManager) CleanupWorkspace() error {
 // into the workspace deployments.json. The expected file contains lines with '<Name>: <address>'
 // or any line containing a 0x-prefixed address. All contracts found in the output will be
 // added/updated.
-func (cm *ContractManager) ImportScriptOutputToDeployments(contractsConfigPath, deploymentsPath, outputPath string) error {
+// contractName and mainContract are optional - if provided, will create an alias entry
+// for contractName pointing to mainContract's address if mainContract is found.
+func (cm *ContractManager) ImportScriptOutputToDeployments(contractsConfigPath, deploymentsPath, outputPath string, contractName, mainContract string) error {
 	// Read script output
 	outData, err := os.ReadFile(outputPath)
 	if err != nil {
@@ -887,6 +889,17 @@ func (cm *ContractManager) ImportScriptOutputToDeployments(contractsConfigPath, 
 
 	lines := strings.Split(string(outData), "\n")
 	fmt.Printf("DEBUG: Read %d lines from script output\n", len(lines))
+
+	// Get deployer address once if we have the key
+	var deployerAddr ethtypes.EthAddress
+	if cm.deployerKey != "" {
+		cmd := exec.Command("cast", "wallet", "address", "--private-key", cm.deployerKey)
+		if deployerOutput, err := cmd.CombinedOutput(); err == nil {
+			if addr, err := ethtypes.ParseEthAddress(strings.TrimSpace(string(deployerOutput))); err == nil {
+				deployerAddr = addr
+			}
+		}
+	}
 
 	// Load existing deployments if present
 	var existing []*DeployedContract
@@ -921,9 +934,10 @@ func (cm *ContractManager) ImportScriptOutputToDeployments(contractsConfigPath, 
 				continue
 			}
 			d := &DeployedContract{
-				Name:            name,
-				Address:         ethAddr,
-				DeployerAddress: ethtypes.EthAddress{},
+				Name:               name,
+				Address:            ethAddr,
+				DeployerAddress:    deployerAddr,
+				DeployerPrivateKey: cm.deployerKey,
 			}
 			byName[name] = d
 			parsedCount++
@@ -942,9 +956,10 @@ func (cm *ContractManager) ImportScriptOutputToDeployments(contractsConfigPath, 
 						continue
 					}
 					d := &DeployedContract{
-						Name:            allowedName,
-						Address:         ethAddr,
-						DeployerAddress: ethtypes.EthAddress{},
+						Name:               allowedName,
+						Address:            ethAddr,
+						DeployerAddress:    deployerAddr,
+						DeployerPrivateKey: cm.deployerKey,
 					}
 					byName[allowedName] = d
 					parsedCount++
@@ -972,6 +987,48 @@ func (cm *ContractManager) ImportScriptOutputToDeployments(contractsConfigPath, 
 	for _, d := range byName {
 		out = append(out, d)
 	}
+
+	// Create alias entry if contractName and mainContract are provided
+	// This allows exports with "self" to work when the script outputs mainContract name
+	if contractName != "" && mainContract != "" {
+		contractNameLower := strings.ToLower(contractName)
+		mainContractLower := strings.ToLower(mainContract)
+
+		// Check if mainContract exists in deployments
+		var mainContractDeployment *DeployedContract
+		for _, d := range out {
+			if strings.EqualFold(d.Name, mainContractLower) {
+				mainContractDeployment = d
+				break
+			}
+		}
+
+		// If mainContract found and contractName doesn't exist, create alias
+		if mainContractDeployment != nil {
+			contractNameExists := false
+			for _, d := range out {
+				if strings.EqualFold(d.Name, contractNameLower) {
+					contractNameExists = true
+					break
+				}
+			}
+
+			if !contractNameExists {
+				aliasDeployment := &DeployedContract{
+					Name:               contractNameLower,
+					Address:            mainContractDeployment.Address,
+					DeployerAddress:    mainContractDeployment.DeployerAddress,
+					DeployerPrivateKey: mainContractDeployment.DeployerPrivateKey,
+					TransactionHash:    mainContractDeployment.TransactionHash,
+					AbiPath:            mainContractDeployment.AbiPath,
+					BindingsPath:       mainContractDeployment.BindingsPath,
+				}
+				out = append(out, aliasDeployment)
+				fmt.Printf("DEBUG: Created alias entry %s -> %s (address: %s)\n", contractNameLower, mainContractLower, mainContractDeployment.Address.String())
+			}
+		}
+	}
+
 	fmt.Printf("DEBUG: Final deployments count: %d\n", len(out))
 
 	// write back
