@@ -603,10 +603,6 @@ func (cm *ContractManager) RunCustomDeployScript(project *ContractProject, scrip
 
 	log.Printf("Deployment script output: %s", string(output))
 
-	if err := cm.CleanupProject(project); err != nil {
-		fmt.Printf("Warning: Failed to cleanup project directory: %v\n", err)
-	}
-
 	return string(output), nil
 }
 
@@ -657,10 +653,6 @@ func (cm *ContractManager) RunShellCommands(project *ContractProject, commands s
 		}
 
 		log.Printf("Command output: %s", string(output))
-	}
-
-	if err := cm.CleanupProject(project); err != nil {
-		fmt.Printf("Warning: Failed to cleanup project directory: %v\n", err)
 	}
 
 	return nil
