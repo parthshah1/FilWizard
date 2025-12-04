@@ -827,7 +827,7 @@ func deployFromLocal(c *cli.Context) error {
 	if importOutput != "" {
 		managerForImport := NewContractManager(workspace, rpcURL)
 		fmt.Printf("Importing script output from %s into %s...\n", importOutput, deploymentsPath)
-		if err := managerForImport.ImportScriptOutputToDeployments(configPath, deploymentsPath, importOutput); err != nil {
+		if err := managerForImport.ImportScriptOutputToDeployments(configPath, deploymentsPath, importOutput, "", ""); err != nil {
 			return fmt.Errorf("failed to import script output: %w", err)
 		}
 		// reload deployments after import
@@ -1009,8 +1009,8 @@ func deployFromLocal(c *cli.Context) error {
 
 			// Wait extra time before custom script to ensure previous transactions are mined
 			// Custom scripts may deploy multiple contracts sequentially and need clean nonce state
-			fmt.Printf("Waiting 30s for previous transactions to confirm before running custom script...\n")
-			time.Sleep(30 * time.Second)
+			fmt.Printf("Waiting 10s for previous transactions to confirm before running custom script...\n")
+			time.Sleep(10 * time.Second)
 
 			fmt.Printf("Running custom deployment script: %s\n", cdef.DeployScript)
 			var err error
@@ -1047,7 +1047,7 @@ func deployFromLocal(c *cli.Context) error {
 
 						// Import addresses from script output
 						fmt.Printf("Importing contract addresses from script output...\n")
-						if err := manager.ImportScriptOutputToDeployments(configPath, deploymentsPath, tempFile.Name()); err != nil {
+						if err := manager.ImportScriptOutputToDeployments(configPath, deploymentsPath, tempFile.Name(), cdef.Name, cdef.MainContract); err != nil {
 							fmt.Printf("Error: failed to import script output: %v\n", err)
 							if scriptFailed {
 								continue

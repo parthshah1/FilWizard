@@ -15,7 +15,7 @@ var PropertiesCmd = &cli.Command{
 	Flags: []cli.Flag{
 		&cli.StringFlag{
 			Name:  "check",
-			Usage: "Property to check (chain-sync, progression, state-consistency, all)",
+			Usage: "Property to check (chain-sync, progression, state-consistency, state-compute, finalized-tipset, all)",
 			Value: "all",
 		},
 		&cli.DurationFlag{
@@ -58,6 +58,10 @@ func runPropertyChecks(c *cli.Context) error {
 		return checker.CheckChainProgression(ctx)
 	case "state-consistency":
 		return checker.CheckStateConsistency(ctx)
+	case "state-compute":
+		return checker.CheckStateComputeConsistency(ctx)
+	case "finalized-tipset":
+		return checker.CheckFinalizedTipSetConsistency(ctx)
 	case "all":
 		fmt.Println("\n=== Running All Property Checks ===")
 
@@ -73,10 +77,18 @@ func runPropertyChecks(c *cli.Context) error {
 			return fmt.Errorf("state consistency property failed: %w", err)
 		}
 
+		if err := checker.CheckStateComputeConsistency(ctx); err != nil {
+			return fmt.Errorf("state compute consistency property failed: %w", err)
+		}
+
+		if err := checker.CheckFinalizedTipSetConsistency(ctx); err != nil {
+			return fmt.Errorf("finalized tipset consistency property failed: %w", err)
+		}
+
 		fmt.Println("\nAll network properties satisfied!")
 		return nil
 
 	default:
-		return fmt.Errorf("unknown property: %s (available: chain-sync, progression, state-consistency, all)", property)
+		return fmt.Errorf("unknown property: %s (available: chain-sync, progression, state-consistency, state-compute, finalized-tipset, all)", property)
 	}
 }

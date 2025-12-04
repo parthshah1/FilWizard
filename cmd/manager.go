@@ -90,31 +90,122 @@ func (cm *ContractManager) CloneRepository(project *ContractProject) error {
 		}
 	}
 
-	cmd := exec.Command("git", "clone", project.GitURL, project.CloneDir)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to clone repository: %w, output: %s", err, output)
+	// Determine which ref to checkout - use the one specified in JSON config
+	checkoutRef := project.GitRef
+	if checkoutRef == "" {
+		// If no ref specified, get default branch from remote
+		lsRemoteCmd := exec.Command("git", "ls-remote", "--symref", project.GitURL, "HEAD")
+		lsRemoteOutput, err := lsRemoteCmd.CombinedOutput()
+		if err == nil {
+			lines := strings.Split(string(lsRemoteOutput), "\n")
+			for _, line := range lines {
+				if strings.HasPrefix(line, "ref:") {
+					parts := strings.Fields(line)
+					if len(parts) >= 2 {
+						ref := parts[1]
+						if strings.HasPrefix(ref, "refs/heads/") {
+							checkoutRef = strings.TrimPrefix(ref, "refs/heads/")
+							break
+						}
+					}
+				}
+			}
+		}
+		if checkoutRef == "" {
+			checkoutRef = "main" // fallback to main
+		}
 	}
 
-	if project.GitRef != "" {
-		fmt.Printf("Checking out git reference: %s\n", project.GitRef)
-		originalDir, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("failed to get current directory: %w", err)
+	originalDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %w", err)
+	}
+	defer os.Chdir(originalDir)
+
+	// Check if directory already exists
+	if _, err := os.Stat(project.CloneDir); err == nil {
+		// Directory exists, fetch latest and checkout the ref
+		fmt.Printf("Directory %s already exists, fetching latest %s...\n", project.CloneDir, checkoutRef)
+		if err := os.Chdir(project.CloneDir); err != nil {
+			return fmt.Errorf("failed to change to project directory: %w", err)
 		}
-		defer os.Chdir(originalDir)
+	} else {
+		// Directory doesn't exist, clone fresh
+		fmt.Printf("Cloning repository: %s\n", project.GitURL)
+		cmd := exec.Command("git", "clone", project.GitURL, project.CloneDir)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to clone repository: %w, output: %s", err, output)
+		}
 
 		if err := os.Chdir(project.CloneDir); err != nil {
 			return fmt.Errorf("failed to change to project directory: %w", err)
 		}
-
-		checkoutCmd := exec.Command("git", "checkout", project.GitRef)
-		checkoutOutput, err := checkoutCmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("failed to checkout git reference '%s': %w, output: %s", project.GitRef, err, checkoutOutput)
-		}
-		fmt.Printf("Successfully checked out: %s\n", project.GitRef)
 	}
+
+	// Always fetch all refs from origin to get the latest remote state
+	fmt.Printf("Fetching all refs from origin...\n")
+	fetchAllCmd := exec.Command("git", "fetch", "origin", "--tags", "--force")
+	fetchAllOutput, err := fetchAllCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to fetch from origin: %w, output: %s", err, fetchAllOutput)
+	}
+
+	// Discard any local changes to ensure clean state
+	fmt.Printf("Discarding any local changes...\n")
+	resetHardCmd := exec.Command("git", "reset", "--hard", "HEAD")
+	if _, resetErr := resetHardCmd.CombinedOutput(); resetErr != nil {
+		// Non-fatal, might be on a detached HEAD or no commits yet
+		fmt.Printf("Note: Could not reset (might be expected)\n")
+	}
+	cleanCmd := exec.Command("git", "clean", "-fd")
+	if _, cleanErr := cleanCmd.CombinedOutput(); cleanErr != nil {
+		// Non-fatal
+		fmt.Printf("Note: Could not clean working directory (might be expected)\n")
+	}
+
+	// Check if the ref exists as a remote branch
+	checkBranchCmd := exec.Command("git", "ls-remote", "--heads", "origin", checkoutRef)
+	branchOutput, _ := checkBranchCmd.CombinedOutput()
+	remoteBranchExists := strings.TrimSpace(string(branchOutput)) != ""
+
+	// Always checkout the latest version of the specified ref
+	fmt.Printf("Checking out latest %s...\n", checkoutRef)
+	var checkoutCmd *exec.Cmd
+	if remoteBranchExists {
+		// For branches, force update local branch to match remote using -B flag
+		// This already puts us at origin/<ref>, so no pull needed
+		fmt.Printf("Updating local branch %s to match origin/%s...\n", checkoutRef, checkoutRef)
+		checkoutCmd = exec.Command("git", "checkout", "-B", checkoutRef, fmt.Sprintf("origin/%s", checkoutRef))
+	} else {
+		// For tags/commits, just checkout directly
+		checkoutCmd = exec.Command("git", "checkout", checkoutRef)
+	}
+
+	checkoutOutput, err := checkoutCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to checkout git reference '%s': %w, output: %s", checkoutRef, err, checkoutOutput)
+	}
+
+	// For branches, ensure upstream tracking is set
+	if remoteBranchExists {
+		setUpstreamCmd := exec.Command("git", "branch", "--set-upstream-to", fmt.Sprintf("origin/%s", checkoutRef), checkoutRef)
+		if _, upstreamErr := setUpstreamCmd.CombinedOutput(); upstreamErr != nil {
+			// Non-fatal, tracking might already be set
+			fmt.Printf("Note: Could not set upstream tracking (may already be set)\n")
+		}
+
+		// Hard reset to origin/<ref> to ensure we're exactly at the remote HEAD
+		// This is more reliable than pull, especially if there are any local modifications
+		fmt.Printf("Resetting to origin/%s to ensure clean state...\n", checkoutRef)
+		resetToOriginCmd := exec.Command("git", "reset", "--hard", fmt.Sprintf("origin/%s", checkoutRef))
+		resetOutput, resetErr := resetToOriginCmd.CombinedOutput()
+		if resetErr != nil {
+			return fmt.Errorf("failed to reset to origin/%s: %w, output: %s", checkoutRef, resetErr, resetOutput)
+		}
+	}
+
+	fmt.Printf("Successfully checked out latest %s\n", checkoutRef)
 
 	// Execute clone commands if specified
 	if len(project.CloneCommands) > 0 {
@@ -142,6 +233,15 @@ func (cm *ContractManager) CloneRepository(project *ContractProject) error {
 			}
 
 			fmt.Printf("Clone command completed successfully\n")
+		}
+
+		// After clone commands, clean up any untracked files but keep intentional changes
+		// Clone commands (like submodule updates) should leave the repo in a clean state
+		fmt.Printf("Cleaning untracked files after clone commands...\n")
+		cleanAfterCloneCmd := exec.Command("git", "clean", "-fd")
+		if _, cleanErr := cleanAfterCloneCmd.CombinedOutput(); cleanErr != nil {
+			// Non-fatal
+			fmt.Printf("Note: Could not clean after clone commands (might be expected)\n")
 		}
 	}
 
@@ -503,10 +603,6 @@ func (cm *ContractManager) RunCustomDeployScript(project *ContractProject, scrip
 
 	log.Printf("Deployment script output: %s", string(output))
 
-	if err := cm.CleanupProject(project); err != nil {
-		fmt.Printf("Warning: Failed to cleanup project directory: %v\n", err)
-	}
-
 	return string(output), nil
 }
 
@@ -557,10 +653,6 @@ func (cm *ContractManager) RunShellCommands(project *ContractProject, commands s
 		}
 
 		log.Printf("Command output: %s", string(output))
-	}
-
-	if err := cm.CleanupProject(project); err != nil {
-		fmt.Printf("Warning: Failed to cleanup project directory: %v\n", err)
 	}
 
 	return nil
@@ -778,7 +870,9 @@ func (cm *ContractManager) CleanupWorkspace() error {
 // into the workspace deployments.json. The expected file contains lines with '<Name>: <address>'
 // or any line containing a 0x-prefixed address. All contracts found in the output will be
 // added/updated.
-func (cm *ContractManager) ImportScriptOutputToDeployments(contractsConfigPath, deploymentsPath, outputPath string) error {
+// contractName and mainContract are optional - if provided, will create an alias entry
+// for contractName pointing to mainContract's address if mainContract is found.
+func (cm *ContractManager) ImportScriptOutputToDeployments(contractsConfigPath, deploymentsPath, outputPath string, contractName, mainContract string) error {
 	// Read script output
 	outData, err := os.ReadFile(outputPath)
 	if err != nil {
@@ -787,6 +881,17 @@ func (cm *ContractManager) ImportScriptOutputToDeployments(contractsConfigPath, 
 
 	lines := strings.Split(string(outData), "\n")
 	fmt.Printf("DEBUG: Read %d lines from script output\n", len(lines))
+
+	// Get deployer address once if we have the key
+	var deployerAddr ethtypes.EthAddress
+	if cm.deployerKey != "" {
+		cmd := exec.Command("cast", "wallet", "address", "--private-key", cm.deployerKey)
+		if deployerOutput, err := cmd.CombinedOutput(); err == nil {
+			if addr, err := ethtypes.ParseEthAddress(strings.TrimSpace(string(deployerOutput))); err == nil {
+				deployerAddr = addr
+			}
+		}
+	}
 
 	// Load existing deployments if present
 	var existing []*DeployedContract
@@ -821,9 +926,10 @@ func (cm *ContractManager) ImportScriptOutputToDeployments(contractsConfigPath, 
 				continue
 			}
 			d := &DeployedContract{
-				Name:            name,
-				Address:         ethAddr,
-				DeployerAddress: ethtypes.EthAddress{},
+				Name:               name,
+				Address:            ethAddr,
+				DeployerAddress:    deployerAddr,
+				DeployerPrivateKey: cm.deployerKey,
 			}
 			byName[name] = d
 			parsedCount++
@@ -842,9 +948,10 @@ func (cm *ContractManager) ImportScriptOutputToDeployments(contractsConfigPath, 
 						continue
 					}
 					d := &DeployedContract{
-						Name:            allowedName,
-						Address:         ethAddr,
-						DeployerAddress: ethtypes.EthAddress{},
+						Name:               allowedName,
+						Address:            ethAddr,
+						DeployerAddress:    deployerAddr,
+						DeployerPrivateKey: cm.deployerKey,
 					}
 					byName[allowedName] = d
 					parsedCount++
@@ -872,6 +979,48 @@ func (cm *ContractManager) ImportScriptOutputToDeployments(contractsConfigPath, 
 	for _, d := range byName {
 		out = append(out, d)
 	}
+
+	// Create alias entry if contractName and mainContract are provided
+	// This allows exports with "self" to work when the script outputs mainContract name
+	if contractName != "" && mainContract != "" {
+		contractNameLower := strings.ToLower(contractName)
+		mainContractLower := strings.ToLower(mainContract)
+
+		// Check if mainContract exists in deployments
+		var mainContractDeployment *DeployedContract
+		for _, d := range out {
+			if strings.EqualFold(d.Name, mainContractLower) {
+				mainContractDeployment = d
+				break
+			}
+		}
+
+		// If mainContract found and contractName doesn't exist, create alias
+		if mainContractDeployment != nil {
+			contractNameExists := false
+			for _, d := range out {
+				if strings.EqualFold(d.Name, contractNameLower) {
+					contractNameExists = true
+					break
+				}
+			}
+
+			if !contractNameExists {
+				aliasDeployment := &DeployedContract{
+					Name:               contractNameLower,
+					Address:            mainContractDeployment.Address,
+					DeployerAddress:    mainContractDeployment.DeployerAddress,
+					DeployerPrivateKey: mainContractDeployment.DeployerPrivateKey,
+					TransactionHash:    mainContractDeployment.TransactionHash,
+					AbiPath:            mainContractDeployment.AbiPath,
+					BindingsPath:       mainContractDeployment.BindingsPath,
+				}
+				out = append(out, aliasDeployment)
+				fmt.Printf("DEBUG: Created alias entry %s -> %s (address: %s)\n", contractNameLower, mainContractLower, mainContractDeployment.Address.String())
+			}
+		}
+	}
+
 	fmt.Printf("DEBUG: Final deployments count: %d\n", len(out))
 
 	// write back
