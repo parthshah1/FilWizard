@@ -1009,8 +1009,8 @@ func deployFromLocal(c *cli.Context) error {
 
 			// Wait extra time before custom script to ensure previous transactions are mined
 			// Custom scripts may deploy multiple contracts sequentially and need clean nonce state
-			fmt.Printf("Waiting 30s for previous transactions to confirm before running custom script...\n")
-			time.Sleep(30 * time.Second)
+			fmt.Printf("Waiting 10s for previous transactions to confirm before running custom script...\n")
+			time.Sleep(10 * time.Second)
 
 			fmt.Printf("Running custom deployment script: %s\n", cdef.DeployScript)
 			var err error
