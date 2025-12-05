@@ -717,6 +717,10 @@ var ContractCmd = &cli.Command{
 					Name:  "import-output",
 					Usage: "Path to file containing custom deployment script output to import addresses from",
 				},
+				&cli.StringSliceFlag{
+					Name:  "env",
+					Usage: "Override environment variables (format: KEY=VALUE, can be used multiple times)",
+				},
 			},
 			Action: deployFromLocal,
 		},
@@ -815,6 +819,38 @@ func deployFromLocal(c *cli.Context) error {
 	contractsConfig, err := config.LoadContractsConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("failed to load contracts config: %w", err)
+	}
+
+	// Initialize Environment map if nil
+	if contractsConfig.Environment == nil {
+		contractsConfig.Environment = make(map[string]string)
+	}
+
+	// Override environment variables from command line flags
+	envOverrides := c.StringSlice("env")
+	if len(envOverrides) > 0 {
+		fmt.Printf("Overriding environment variables from command line...\n")
+		for _, envVar := range envOverrides {
+			parts := strings.SplitN(envVar, "=", 2)
+			if len(parts) == 2 {
+				key := parts[0]
+				value := parts[1]
+				// Override in global environment
+				contractsConfig.Environment[key] = value
+				fmt.Printf("  Overriding %s=%s\n", key, value)
+			}
+		}
+	}
+
+	// Override RPC_URL, ETH_RPC_URL, and FILECOIN_RPC from --rpc-url flag
+	// These are always the same - they all point to the Filecoin RPC endpoint
+	if rpcURL != "" {
+		contractsConfig.Environment["RPC_URL"] = rpcURL
+		contractsConfig.Environment["ETH_RPC_URL"] = rpcURL
+		contractsConfig.Environment["FILECOIN_RPC"] = rpcURL
+		fmt.Printf("  Setting RPC_URL=%s (from --rpc-url flag)\n", rpcURL)
+		fmt.Printf("  Setting ETH_RPC_URL=%s (from --rpc-url flag)\n", rpcURL)
+		fmt.Printf("  Setting FILECOIN_RPC=%s (from --rpc-url flag)\n", rpcURL)
 	}
 
 	deploymentsPath := filepath.Join(workspace, "deployments.json")
