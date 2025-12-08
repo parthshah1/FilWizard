@@ -808,13 +808,24 @@ func deployFromLocal(c *cli.Context) error {
 	rpcURL := c.String("rpc-url")
 	defaultGenerateBindings := c.Bool("bindings")
 	shouldCompile := c.Bool("compile")
-	importOutput := c.String("import-output")
-
 	if shouldCompile {
 		if err := compileWithForge(); err != nil {
 			return fmt.Errorf("compilation failed: %w", err)
 		}
 	}
+
+	// Capture initial environment for overriding config later
+	initialEnv := make(map[string]string)
+	for _, e := range os.Environ() {
+		parts := strings.SplitN(e, "=", 2)
+		if len(parts) == 2 {
+			initialEnv[parts[0]] = parts[1]
+		}
+	}
+
+	importOutput := c.String("import-output")
+
+
 
 	contractsConfig, err := config.LoadContractsConfig(configPath)
 	if err != nil {
@@ -828,6 +839,7 @@ func deployFromLocal(c *cli.Context) error {
 
 	// Override environment variables from command line flags
 	envOverrides := c.StringSlice("env")
+	cliEnvOverrides := make(map[string]string)
 	if len(envOverrides) > 0 {
 		fmt.Printf("Overriding environment variables from command line...\n")
 		for _, envVar := range envOverrides {
@@ -835,7 +847,9 @@ func deployFromLocal(c *cli.Context) error {
 			if len(parts) == 2 {
 				key := parts[0]
 				value := parts[1]
-				// Override in global environment
+				// Save to CLI overrides map
+				cliEnvOverrides[key] = value
+				// Also override in global environment for initial resolution
 				contractsConfig.Environment[key] = value
 				fmt.Printf("  Overriding %s=%s\n", key, value)
 			}
@@ -937,6 +951,25 @@ func deployFromLocal(c *cli.Context) error {
 
 		// Start with contract-configured env values
 		envVars := contractsConfig.GetEnvironmentForContract(cdef.Name)
+
+		// Force CLI overrides to take precedence over contract-specific config
+		for k, v := range cliEnvOverrides {
+			envVars[k] = v
+		}
+
+		// Also respect initial environment variables if they conflict with config
+		// This gives priority to `VAR=VAL ./mpool-tx` over config files
+		for k := range envVars {
+			if v, ok := initialEnv[k]; ok {
+				// Only override if NOT explicitly set via CLI flags
+				if _, explicit := cliEnvOverrides[k]; !explicit {
+					if envVars[k] != v {
+						fmt.Printf("  Shell override: %s=%s (config was: %s)\n", k, v, envVars[k])
+						envVars[k] = v
+					}
+				}
+			}
+		}
 
 		// Resolve placeholders using already-loaded deployments (config.DeploymentRecord)
 		for k, v := range envVars {
