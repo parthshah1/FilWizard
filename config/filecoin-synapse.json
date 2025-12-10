@@ -15,7 +15,7 @@
       "dependencies": [],
       "generate_bindings": true,
       "clone_commands": [
-        "git submodule update --init --recursive"
+        "forge build"
       ],
       "environment": {
         "USDFC_INITIAL_MINT_AMOUNT_WEI": "10000000000000000000"
