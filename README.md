@@ -6,14 +6,12 @@ A comprehensive Filecoin testing tool designed for contract developers, ecosyste
 
 `FilWizard` is a command-line tool that provides extensive capabilities for:
 - **Wallet Management**: Create and manage Filecoin and Ethereum wallets
-- **Transaction Testing**: Send individual transactions or spam the mempool with high-volume transaction loads
 - **Smart Contract Operations**: Deploy, call, and manage smart contracts (both Foundry and Hardhat projects)
 - **Advanced Configuration-Based Deployment**: Deploy complex contract ecosystems with dependency management, template variables, post-deployment actions, and custom scripts
 - **Automated Deployment**: Deploy contracts from Git repositories with full automation support
 - **Go Bindings Generation**: Generate Go bindings for deployed contracts using abigen
-- **Network Properties Checking**: Verify chain sync, progression, and state consistency across multiple nodes
 
-This tool is particularly useful for testing Filecoin implementations in controlled, deterministic environments and stress-testing network behavior under various conditions.
+This tool is particularly useful for testing Filecoin implementations in controlled, deterministic environments.
 
 ### Key Features
 
@@ -33,11 +31,10 @@ This tool is particularly useful for testing Filecoin implementations in control
 - Support for custom deployment scripts
 - Import addresses from script output
 
-**Network Testing:**
-- Mempool stress testing with configurable concurrency
-- Network property verification (sync, progression, consistency)
-- Multi-node testing support
-- Antithesis integration for deterministic testing
+**Wallet Management:**
+- Create Filecoin (secp256k1, BLS) and Ethereum-style wallets
+- Fund wallets from the default node wallet
+- Check balances and list wallets
 
 ### Quick Start: Deploying Contracts
 
@@ -89,7 +86,10 @@ Before using `FilWizard`, ensure you have the following installed:
 ### Environment Variables
 
 - `FILECOIN_RPC`: Filecoin RPC URL (e.g., `http://localhost:1234/rpc/v1`)
-- `FILECOIN_TOKEN`: Path to JWT token file for authentication (optional)
+- `FILECOIN_TOKEN`: JWT token for authentication (the actual token string, not a file path). Get it from your Lotus node:
+  ```bash
+  export FILECOIN_TOKEN=$(cat ~/.lotus/token)
+  ```
 - `VERBOSE`: Enable verbose output (default: `false`)
 
 ### Command-Line Flags
@@ -105,12 +105,9 @@ Global flags available for all commands:
 ## Documentation
 
 - **[Wallet Operations](docs/wallet.md)** - Create, manage, and fund wallets
-- **[Mempool Operations](docs/mempool.md)** - Send transactions and stress test the network
 - **[Contract Deployment](docs/contracts.md)** - Deploy and interact with smart contracts
 - **[Configuration System](docs/configuration.md)** - Advanced configuration-based deployment
-- **[Network Properties](docs/properties.md)** - Check chain sync, progression, and consistency
 - **[Examples](docs/examples.md)** - Complete workflow examples
-- **[Antithesis Testing](docs/antithesis.md)** - Testing in deterministic environments
 - **[Development Guide](docs/development.md)** - Building and contributing
 
 ## Quick Examples
@@ -138,10 +135,10 @@ filwizard contract clone-config --config config/contracts.json
 filwizard contract deploy-local --config config/contracts.json --create-deployer
 ```
 
-### Stress Test Network
+### List Wallets
 
 ```bash
-filwizard mempool spam --count 10000 --concurrent 20
+filwizard wallet list
 ```
 
 ## Contributing

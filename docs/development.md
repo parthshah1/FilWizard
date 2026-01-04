@@ -5,23 +5,19 @@ Guide for building, developing, and contributing to FilWizard.
 ## Project Structure
 
 ```
-mpool-tx/
+filwizard/
 ├── cmd/                           # Command implementations
 │   ├── root.go                   # Root command and CLI setup
-│   ├── wallet.go                 # Wallet operations
-│   ├── mempool.go                # Mempool/transaction operations
+│   ├── wallet.go                 # Wallet operations (create, list, fund, balance)
 │   ├── contract.go               # Contract deployment commands
-│   ├── manager.go                # Contract management logic
-│   ├── properties.go             # Network properties checking
-│   ├── accounts.go               # Account management
-│   └── payments.go               # Payment operations
+│   └── manager.go                # Contract management logic, types (AccountInfo, AccountsFile)
 ├── config/                        # Configuration management
-│   ├── config.go                 # Config loading and client setup
+│   ├── config.go                 # Config loading
+│   ├── client.go                 # Filecoin API client wrapper
 │   ├── contracts.json            # Default contract configuration
 │   ├── filecoin-synapse.json     # Example configuration
 │   ├── contract_dependency.go    # Dependency resolution and template variables
-│   ├── contract_wrapper.go       # Contract interaction wrapper
-│   └── properties.go             # Network properties checking logic
+│   └── contract_wrapper.go       # Contract interaction wrapper
 ├── contracts/                     # Example contracts
 ├── docs/                          # Documentation
 ├── main.go                        # Entry point
@@ -69,7 +65,7 @@ When adding new features:
 - Verify template variable resolution
 - Test dependency ordering
 - Validate post-deployment actions
-- Check network properties when applicable
+- Test wallet operations with authenticated RPC connections
 
 ## Contributing
 
