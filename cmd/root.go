@@ -30,11 +30,6 @@ func NewApp() *cli.App {
 				EnvVars: []string{"FILECOIN_TOKEN"},
 			},
 			&cli.BoolFlag{
-				Name:    "antithesis",
-				Usage:   "Enable Antithesis property assertions (env: ANTITHESIS_MODE)",
-				EnvVars: []string{"ANTITHESIS_MODE"},
-			},
-			&cli.BoolFlag{
 				Name:    "verbose",
 				Usage:   "Verbose output (env: VERBOSE)",
 				EnvVars: []string{"VERBOSE"},
@@ -51,12 +46,6 @@ func NewApp() *cli.App {
 			}
 			if c.IsSet("verbose") {
 				cfg.Verbose = c.Bool("verbose")
-			}
-
-			// Set global antithesis mode
-			config.SetAntithesisMode(c.Bool("antithesis"))
-			if config.IsAntithesisEnabled() {
-				fmt.Println("Antithesis property assertions enabled")
 			}
 
 			// Initialize client
@@ -76,11 +65,7 @@ func NewApp() *cli.App {
 		},
 		Commands: []*cli.Command{
 			WalletCmd,
-			MempoolCmd,
 			ContractCmd,
-			PropertiesCmd,
-			AccountsCmd,
-			PaymentsCmd,
 		},
 	}
 	return app

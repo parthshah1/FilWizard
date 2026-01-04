@@ -32,6 +32,50 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
+// WorkspaceConfig holds workspace configuration
+type WorkspaceConfig struct {
+	RPC string
+}
+
+// loadAccounts loads the accounts.json file from the workspace
+func loadAccounts(workspace string) (*AccountsFile, error) {
+	accountsPath := filepath.Join(workspace, "accounts.json")
+	data, err := os.ReadFile(accountsPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read accounts file: %w", err)
+	}
+
+	var accounts AccountsFile
+	if err := json.Unmarshal(data, &accounts); err != nil {
+		return nil, fmt.Errorf("failed to parse accounts file: %w", err)
+	}
+
+	return &accounts, nil
+}
+
+// loadDeployments loads the deployments.json file from the workspace
+func loadDeployments(workspace string) ([]config.DeploymentRecord, error) {
+	deploymentsPath := filepath.Join(workspace, "deployments.json")
+	data, err := os.ReadFile(deploymentsPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read deployments file: %w", err)
+	}
+
+	var deployments []config.DeploymentRecord
+	if err := json.Unmarshal(data, &deployments); err != nil {
+		return nil, fmt.Errorf("failed to parse deployments file: %w", err)
+	}
+
+	return deployments, nil
+}
+
+// loadWorkspaceConfig loads the workspace configuration
+func loadWorkspaceConfig() (*WorkspaceConfig, error) {
+	return &WorkspaceConfig{
+		RPC: cfg.RPC,
+	}, nil
+}
+
 func waitForTransactionReceipt(ctx context.Context, api api.FullNode, txHash ethtypes.EthHash) (*api.EthTxReceipt, error) {
 	for i := 0; i < 60; i++ {
 		receipt, err := api.EthGetTransactionReceipt(ctx, txHash)
@@ -824,8 +868,6 @@ func deployFromLocal(c *cli.Context) error {
 	}
 
 	importOutput := c.String("import-output")
-
-
 
 	contractsConfig, err := config.LoadContractsConfig(configPath)
 	if err != nil {
