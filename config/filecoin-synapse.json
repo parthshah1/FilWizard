@@ -67,7 +67,8 @@
       "script_dir": "service_contracts",
       "deploy_script": "tools/deploy-all-warm-storage.sh",
       "clone_commands": [
-        "git submodule update --init --recursive"
+        "git submodule update --init --recursive",
+        "cd service_contracts && forge build"    
       ],
       "environment": {
         "ETH_RPC_URL": "http://lotus0:1234/rpc/v1",
