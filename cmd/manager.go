@@ -90,34 +90,34 @@ func (cm *ContractManager) CloneRepository(project *ContractProject) error {
 		}
 	}
 
-		// Determine which ref to checkout - use the one specified in JSON config
-		checkoutRef := project.GitRef
-		if checkoutRef == "" {
-			// If no ref specified, get default branch from remote
+	// Determine which ref to checkout - use the one specified in JSON config
+	checkoutRef := project.GitRef
+	if checkoutRef == "" {
+		// If no ref specified, get default branch from remote
 		lsRemoteCmd := exec.Command("git", "ls-remote", "--symref", project.GitURL, "HEAD")
-			lsRemoteOutput, err := lsRemoteCmd.CombinedOutput()
-			if err == nil {
-				lines := strings.Split(string(lsRemoteOutput), "\n")
-				for _, line := range lines {
-					if strings.HasPrefix(line, "ref:") {
-						parts := strings.Fields(line)
-						if len(parts) >= 2 {
-							ref := parts[1]
-							if strings.HasPrefix(ref, "refs/heads/") {
-								checkoutRef = strings.TrimPrefix(ref, "refs/heads/")
-								break
-							}
+		lsRemoteOutput, err := lsRemoteCmd.CombinedOutput()
+		if err == nil {
+			lines := strings.Split(string(lsRemoteOutput), "\n")
+			for _, line := range lines {
+				if strings.HasPrefix(line, "ref:") {
+					parts := strings.Fields(line)
+					if len(parts) >= 2 {
+						ref := parts[1]
+						if strings.HasPrefix(ref, "refs/heads/") {
+							checkoutRef = strings.TrimPrefix(ref, "refs/heads/")
+							break
 						}
 					}
 				}
 			}
-			if checkoutRef == "" {
-				checkoutRef = "main" // fallback to main
-			}
 		}
+		if checkoutRef == "" {
+			checkoutRef = "main" // fallback to main
+		}
+	}
 
 	originalDir, err := os.Getwd()
-		if err != nil {
+	if err != nil {
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 	defer os.Chdir(originalDir)
@@ -182,10 +182,10 @@ func (cm *ContractManager) CloneRepository(project *ContractProject) error {
 		checkoutCmd = exec.Command("git", "checkout", checkoutRef)
 	}
 
-			checkoutOutput, err := checkoutCmd.CombinedOutput()
-			if err != nil {
-				return fmt.Errorf("failed to checkout git reference '%s': %w, output: %s", checkoutRef, err, checkoutOutput)
-			}
+	checkoutOutput, err := checkoutCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to checkout git reference '%s': %w, output: %s", checkoutRef, err, checkoutOutput)
+	}
 
 	// For branches, ensure upstream tracking is set
 	if remoteBranchExists {
@@ -242,6 +242,13 @@ func (cm *ContractManager) CloneRepository(project *ContractProject) error {
 		if _, cleanErr := cleanAfterCloneCmd.CombinedOutput(); cleanErr != nil {
 			// Non-fatal
 			fmt.Printf("Note: Could not clean after clone commands (might be expected)\n")
+		}
+
+		// Create marker file to indicate clone commands have been executed
+		// This allows deploy-local to skip re-running them in air-gapped environments
+		markerFile := filepath.Join(project.CloneDir, ".clone_commands_done")
+		if err := os.WriteFile(markerFile, []byte("done\n"), 0644); err != nil {
+			fmt.Printf("Warning: failed to create marker file %s: %v\n", markerFile, err)
 		}
 	}
 
@@ -594,6 +601,8 @@ func (cm *ContractManager) RunCustomDeployScript(project *ContractProject, scrip
 
 	if cm.rpcURL != "" {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("RPC_URL=%s", cm.rpcURL))
+		cmd.Env = append(cmd.Env, fmt.Sprintf("ETH_RPC_URL=%s", cm.rpcURL))
+		cmd.Env = append(cmd.Env, fmt.Sprintf("FILECOIN_RPC=%s", cm.rpcURL))
 	}
 
 	output, err := cmd.CombinedOutput()

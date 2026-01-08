@@ -825,8 +825,6 @@ func deployFromLocal(c *cli.Context) error {
 
 	importOutput := c.String("import-output")
 
-
-
 	contractsConfig, err := config.LoadContractsConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("failed to load contracts config: %w", err)
@@ -862,6 +860,10 @@ func deployFromLocal(c *cli.Context) error {
 		contractsConfig.Environment["RPC_URL"] = rpcURL
 		contractsConfig.Environment["ETH_RPC_URL"] = rpcURL
 		contractsConfig.Environment["FILECOIN_RPC"] = rpcURL
+		// Also add to cliEnvOverrides so they take precedence over contract-specific environment
+		cliEnvOverrides["RPC_URL"] = rpcURL
+		cliEnvOverrides["ETH_RPC_URL"] = rpcURL
+		cliEnvOverrides["FILECOIN_RPC"] = rpcURL
 		fmt.Printf("  Setting RPC_URL=%s (from --rpc-url flag)\n", rpcURL)
 		fmt.Printf("  Setting ETH_RPC_URL=%s (from --rpc-url flag)\n", rpcURL)
 		fmt.Printf("  Setting FILECOIN_RPC=%s (from --rpc-url flag)\n", rpcURL)

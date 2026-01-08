@@ -1,7 +1,7 @@
 {
   "environment": {
     "CHAIN_ID": "31415926",
-    "RPC_URL": "http://lotus0:1234/rpc/v1"
+    "RPC_URL": "http://localhost:1234/rpc/v1"
   },
   "contracts": [
     {
@@ -68,10 +68,11 @@
       "deploy_script": "tools/deploy-all-warm-storage.sh",
       "clone_commands": [
         "git submodule update --init --recursive",
-        "cd service_contracts && forge build"    
+        "cd service_contracts && forge config --fix",
+        "cd service_contracts && forge build"
       ],
       "environment": {
-        "ETH_RPC_URL": "http://lotus0:1234/rpc/v1",
+        "ETH_RPC_URL": "http://localhost:1234/rpc/v1",
         "CHAIN": "31415926",
         "SERVICE_NAME": "Synapse",
         "SERVICE_DESCRIPTION": "Synapse Service",
