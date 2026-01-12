@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"math/big"
 	"os"
 	"os/exec"
@@ -51,36 +50,31 @@ func waitForTransactionReceipt(ctx context.Context, api api.FullNode, txHash eth
 	return nil, fmt.Errorf("transaction not confirmed after waiting")
 }
 
-func SignTransaction(tx *ethtypes.Eth1559TxArgs, privateKey []byte) {
+func SignTransaction(tx *ethtypes.Eth1559TxArgs, privateKey []byte) error {
 	preimage, err := tx.ToRlpUnsignedMsg()
 	if err != nil {
-		log.Printf("Failed to convert transaction to RLP: %v", err)
-		return
+		return fmt.Errorf("failed to convert transaction to RLP: %w", err)
 	}
 	signature, err := sigs.Sign(filcrypto.SigTypeDelegated, privateKey, preimage)
 	if err != nil {
-		log.Printf("Failed to sign transaction: %v", err)
-		return
+		return fmt.Errorf("failed to sign transaction: %w", err)
 	}
-	err = tx.InitialiseSignature(*signature)
-	if err != nil {
-		log.Printf("Failed to initialise signature: %v", err)
-		return
+	if err := tx.InitialiseSignature(*signature); err != nil {
+		return fmt.Errorf("failed to initialise signature: %w", err)
 	}
+	return nil
 }
 
-func SubmitTransaction(ctx context.Context, api api.FullNode, tx ethtypes.EthTransaction) ethtypes.EthHash {
+func SubmitTransaction(ctx context.Context, api api.FullNode, tx ethtypes.EthTransaction) (ethtypes.EthHash, error) {
 	signed, err := tx.ToRlpSignedMsg()
 	if err != nil {
-		log.Printf("Failed to convert transaction to RLP: %v", err)
-		return ethtypes.EthHash{}
+		return ethtypes.EthHash{}, fmt.Errorf("failed to convert transaction to RLP: %w", err)
 	}
 	txHash, err := api.EthSendRawTransaction(ctx, signed)
 	if err != nil {
-		log.Printf("Failed to send transaction: %v", err)
-		return ethtypes.EthHash{}
+		return ethtypes.EthHash{}, fmt.Errorf("failed to send transaction: %w", err)
 	}
-	return txHash
+	return txHash, nil
 }
 
 func DeployContract(ctx context.Context, contractPath string, deployer string, fundAmount string, generateBindings bool, workspace string, contractName string, abiPath string) error {
@@ -91,9 +85,9 @@ func DeployContract(ctx context.Context, contractPath string, deployer string, f
 	var deployerAddr address.Address
 
 	if deployer == "" {
-		k, eth, fil := NewAccount()
-		if k == nil {
-			return fmt.Errorf("failed to create deployer account")
+		k, eth, fil, err := NewAccount()
+		if err != nil {
+			return fmt.Errorf("failed to create deployer account: %w", err)
 		}
 		key = k
 		ethAddr = eth
@@ -108,10 +102,13 @@ func DeployContract(ctx context.Context, contractPath string, deployer string, f
 	}
 
 	if fundAmount != "" {
-		amount, _ := filbig.FromString(fundAmount)
+		amount, err := filbig.FromString(fundAmount)
+		if err != nil {
+			return fmt.Errorf("invalid fund amount '%s': %w", fundAmount, err)
+		}
 		fundAmountAtto := types.BigMul(amount, types.NewInt(1e18))
 
-		_, err := FundWallet(ctx, deployerAddr, fundAmountAtto, true)
+		_, err = FundWallet(ctx, deployerAddr, fundAmountAtto, true)
 		if err != nil {
 			return fmt.Errorf("failed to fund deployer: %w", err)
 		}
@@ -176,12 +173,14 @@ func DeployContract(ctx context.Context, contractPath string, deployer string, f
 
 	fmt.Println("Signing and submitting transaction...")
 	if key != nil {
-		SignTransaction(&tx, key.PrivateKey)
+		if err := SignTransaction(&tx, key.PrivateKey); err != nil {
+			return fmt.Errorf("failed to sign transaction: %w", err)
+		}
 	}
 
-	txHash := SubmitTransaction(ctx, api, &tx)
-	if txHash == ethtypes.EmptyEthHash {
-		return fmt.Errorf("failed to submit transaction")
+	txHash, err := SubmitTransaction(ctx, api, &tx)
+	if err != nil {
+		return fmt.Errorf("failed to submit transaction: %w", err)
 	}
 
 	fmt.Println("Waiting for transaction to be mined...")
@@ -1636,9 +1635,9 @@ func callWriteMethod(c *cli.Context) error {
 	if needsCreation {
 		fmt.Printf("Creating new account '%s'...\n", fromRole)
 
-		key, ethAddr, filAddr := NewAccount()
-		if key == nil {
-			return fmt.Errorf("failed to create account")
+		key, ethAddr, filAddr, err := NewAccount()
+		if err != nil {
+			return fmt.Errorf("failed to create account: %w", err)
 		}
 
 		privateKeyHex := fmt.Sprintf("0x%x", key.PrivateKey)
@@ -1649,11 +1648,14 @@ func callWriteMethod(c *cli.Context) error {
 			PrivateKey: privateKeyHex,
 		}
 
-		amount, _ := filbig.FromString(fundAmount)
+		amount, err := filbig.FromString(fundAmount)
+		if err != nil {
+			return fmt.Errorf("invalid fund amount '%s': %w", fundAmount, err)
+		}
 		fundAmountAtto := types.BigMul(amount, types.NewInt(1e18))
 
 		fmt.Printf("Funding %s with %s FIL...\n", fromRole, fundAmount)
-		_, err := FundWallet(ctx, filAddr, fundAmountAtto, true)
+		_, err = FundWallet(ctx, filAddr, fundAmountAtto, true)
 		if err != nil {
 			return fmt.Errorf("failed to fund account: %w", err)
 		}
@@ -1692,9 +1694,9 @@ func callWriteMethod(c *cli.Context) error {
 		return fmt.Errorf("failed to parse arguments: %w", err)
 	}
 
-	privateKey, err := crypto.HexToECDSA(fromAccount.PrivateKey[2:])
+	privateKey, err := parsePrivateKey(fromAccount.PrivateKey)
 	if err != nil {
-		return fmt.Errorf("invalid private key: %w", err)
+		return fmt.Errorf("invalid private key for '%s': %w", fromRole, err)
 	}
 
 	fmt.Printf("Sending transaction to %s.%s(%v)\n", contractName, methodName, formatArgs(args))

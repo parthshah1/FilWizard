@@ -16,8 +16,8 @@ var (
 // NewApp creates a new CLI app
 func NewApp() *cli.App {
 	app := &cli.App{
-		Name:  "mpool-tx",
-		Usage: "Filecoin testing tool",
+		Name:  "filwizard",
+		Usage: "Smart contract deployment and wallet management tool for Filecoin",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "rpc",
@@ -28,11 +28,6 @@ func NewApp() *cli.App {
 				Name:    "token",
 				Usage:   "JWT token file path (env: FILECOIN_TOKEN)",
 				EnvVars: []string{"FILECOIN_TOKEN"},
-			},
-			&cli.BoolFlag{
-				Name:    "antithesis",
-				Usage:   "Enable Antithesis property assertions (env: ANTITHESIS_MODE)",
-				EnvVars: []string{"ANTITHESIS_MODE"},
 			},
 			&cli.BoolFlag{
 				Name:    "verbose",
@@ -53,12 +48,6 @@ func NewApp() *cli.App {
 				cfg.Verbose = c.Bool("verbose")
 			}
 
-			// Set global antithesis mode
-			config.SetAntithesisMode(c.Bool("antithesis"))
-			if config.IsAntithesisEnabled() {
-				fmt.Println("Antithesis property assertions enabled")
-			}
-
 			// Initialize client
 			var err error
 			clientt, err = config.New(cfg)
@@ -76,9 +65,7 @@ func NewApp() *cli.App {
 		},
 		Commands: []*cli.Command{
 			WalletCmd,
-			MempoolCmd,
 			ContractCmd,
-			PropertiesCmd,
 			AccountsCmd,
 			PaymentsCmd,
 		},

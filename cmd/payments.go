@@ -296,9 +296,9 @@ func mintTokens(c *cli.Context) error {
 		return fmt.Errorf("invalid amount: %s", amountStr)
 	}
 
-	privateKey, err := crypto.HexToECDSA(minterAccount.PrivateKey[2:])
+	privateKey, err := parsePrivateKey(minterAccount.PrivateKey)
 	if err != nil {
-		return fmt.Errorf("invalid private key: %w", err)
+		return fmt.Errorf("invalid private key for minter '%s': %w", minterRole, err)
 	}
 
 	auth, err := bind.NewKeyedTransactorWithChainID(privateKey, big.NewInt(31415926))
@@ -317,7 +317,11 @@ func mintTokens(c *cli.Context) error {
 	}
 	defer client.Close()
 
-	contract := bind.NewBoundContract(common.HexToAddress(tokenRecord.Address), parseABI(tokenABI), client, client, client)
+	parsedABI, err := parseABI(tokenABI)
+	if err != nil {
+		return err
+	}
+	contract := bind.NewBoundContract(common.HexToAddress(tokenRecord.Address), parsedABI, client, client, client)
 
 	tx, err := contract.Transact(auth, "mint", common.HexToAddress(toAccount.EthAddress), amount)
 	if err != nil {
@@ -367,12 +371,12 @@ func mintAndFundPrivateKey(c *cli.Context) error {
 		}
 	}
 
-	minterECDSA, err := crypto.HexToECDSA(strings.TrimPrefix(minterKey, "0x"))
+	minterECDSA, err := parsePrivateKey(minterKey)
 	if err != nil {
 		return fmt.Errorf("invalid minter private key: %w", err)
 	}
 
-	recipientECDSA, err := crypto.HexToECDSA(strings.TrimPrefix(recipientKey, "0x"))
+	recipientECDSA, err := parsePrivateKey(recipientKey)
 	if err != nil {
 		return fmt.Errorf("invalid recipient private key: %w", err)
 	}
@@ -398,7 +402,11 @@ func mintAndFundPrivateKey(c *cli.Context) error {
 		return fmt.Errorf("failed to create transactor: %w", err)
 	}
 
-	contract := bind.NewBoundContract(common.HexToAddress(tokenRecord.Address), parseABI(tokenABI), client, client, client)
+	parsedABI, err := parseABI(tokenABI)
+	if err != nil {
+		return err
+	}
+	contract := bind.NewBoundContract(common.HexToAddress(tokenRecord.Address), parsedABI, client, client, client)
 
 	recipientEthAddr := crypto.PubkeyToAddress(recipientECDSA.PublicKey)
 
@@ -485,9 +493,9 @@ func approveTokens(c *cli.Context) error {
 		return fmt.Errorf("invalid amount: %s", amountStr)
 	}
 
-	privateKey, err := crypto.HexToECDSA(fromAccount.PrivateKey[2:])
+	privateKey, err := parsePrivateKey(fromAccount.PrivateKey)
 	if err != nil {
-		return fmt.Errorf("invalid private key: %w", err)
+		return fmt.Errorf("invalid private key for '%s': %w", fromRole, err)
 	}
 
 	auth, err := bind.NewKeyedTransactorWithChainID(privateKey, big.NewInt(31415926))
@@ -506,7 +514,11 @@ func approveTokens(c *cli.Context) error {
 	}
 	defer client.Close()
 
-	contract := bind.NewBoundContract(common.HexToAddress(tokenRecord.Address), parseABI(tokenABI), client, client, client)
+	parsedABI, err := parseABI(tokenABI)
+	if err != nil {
+		return err
+	}
+	contract := bind.NewBoundContract(common.HexToAddress(tokenRecord.Address), parsedABI, client, client, client)
 
 	tx, err := contract.Transact(auth, "approve", common.HexToAddress(spenderRecord.Address), amount)
 	if err != nil {
@@ -555,9 +567,9 @@ func depositTokens(c *cli.Context) error {
 		return fmt.Errorf("invalid amount: %s", amountStr)
 	}
 
-	privateKey, err := crypto.HexToECDSA(fromAccount.PrivateKey[2:])
+	privateKey, err := parsePrivateKey(fromAccount.PrivateKey)
 	if err != nil {
-		return fmt.Errorf("invalid private key: %w", err)
+		return fmt.Errorf("invalid private key for '%s': %w", fromRole, err)
 	}
 
 	auth, err := bind.NewKeyedTransactorWithChainID(privateKey, big.NewInt(31415926))
@@ -576,7 +588,11 @@ func depositTokens(c *cli.Context) error {
 	}
 	defer client.Close()
 
-	contract := bind.NewBoundContract(common.HexToAddress(paymentsRecord.Address), parseABI(paymentsABI), client, client, client)
+	parsedABI, err := parseABI(paymentsABI)
+	if err != nil {
+		return err
+	}
+	contract := bind.NewBoundContract(common.HexToAddress(paymentsRecord.Address), parsedABI, client, client, client)
 
 	tx, err := contract.Transact(auth, "deposit", common.HexToAddress(tokenRecord.Address), common.HexToAddress(fromAccount.EthAddress), amount)
 	if err != nil {
@@ -640,9 +656,9 @@ func approveOperator(c *cli.Context) error {
 		return fmt.Errorf("invalid max lockup period: %s", maxLockupPeriodStr)
 	}
 
-	privateKey, err := crypto.HexToECDSA(fromAccount.PrivateKey[2:])
+	privateKey, err := parsePrivateKey(fromAccount.PrivateKey)
 	if err != nil {
-		return fmt.Errorf("invalid private key: %w", err)
+		return fmt.Errorf("invalid private key for '%s': %w", fromRole, err)
 	}
 
 	auth, err := bind.NewKeyedTransactorWithChainID(privateKey, big.NewInt(31415926))
@@ -661,7 +677,11 @@ func approveOperator(c *cli.Context) error {
 	}
 	defer client.Close()
 
-	contract := bind.NewBoundContract(common.HexToAddress(paymentsRecord.Address), parseABI(paymentsABI), client, client, client)
+	parsedABI, err := parseABI(paymentsABI)
+	if err != nil {
+		return err
+	}
+	contract := bind.NewBoundContract(common.HexToAddress(paymentsRecord.Address), parsedABI, client, client, client)
 
 	tx, err := contract.Transact(auth, "setOperatorApproval",
 		common.HexToAddress(tokenRecord.Address),
@@ -723,7 +743,10 @@ func checkBalance(c *cli.Context) error {
 			return fmt.Errorf("failed to read ABI: %w", err)
 		}
 
-		parsedABI := parseABI(abiData)
+		parsedABI, err := parseABI(abiData)
+		if err != nil {
+			return err
+		}
 		accountAddr := common.HexToAddress(account.EthAddress)
 		data, err := parsedABI.Pack("accountBalances", accountAddr)
 		if err != nil {
@@ -768,7 +791,10 @@ func checkBalance(c *cli.Context) error {
 		return fmt.Errorf("failed to read ABI: %w", err)
 	}
 
-	parsedABI := parseABI(abiData)
+	parsedABI, err := parseABI(abiData)
+	if err != nil {
+		return err
+	}
 	accountAddr := common.HexToAddress(account.EthAddress)
 	data, err := parsedABI.Pack("balanceOf", accountAddr)
 	if err != nil {
@@ -851,12 +877,12 @@ func findContract(deployments []DeploymentRecord, name string) (*DeploymentRecor
 	return nil, fmt.Errorf("contract '%s' not found", name)
 }
 
-func parseABI(abiJSON []byte) abi.ABI {
+func parseABI(abiJSON []byte) (abi.ABI, error) {
 	parsedABI, err := abi.JSON(strings.NewReader(string(abiJSON)))
 	if err != nil {
-		panic(err)
+		return abi.ABI{}, fmt.Errorf("failed to parse ABI: %w", err)
 	}
-	return parsedABI
+	return parsedABI, nil
 }
 
 type DeploymentRecord struct {

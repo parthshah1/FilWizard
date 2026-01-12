@@ -86,7 +86,10 @@ func createAccounts(c *cli.Context) error {
 			continue
 		}
 
-		key, ethAddr, filAddr := NewAccount()
+		key, ethAddr, filAddr, err := NewAccount()
+		if err != nil {
+			return fmt.Errorf("failed to create account for role '%s': %w", role, err)
+		}
 
 		if fund {
 			fundAmount := types.FromFil(10)

@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 
 	"github.com/filecoin-project/go-address"
@@ -36,33 +35,28 @@ func ListWallets(ctx context.Context) ([]address.Address, error) {
 	return addrs, nil
 }
 
-// Returns the private key, Ethereum address, and Filecoin address
-func NewAccount() (*key.Key, ethtypes.EthAddress, address.Address) {
-	// Generate a secp256k1 key; this will back the Ethereum identity.
+// NewAccount generates a new secp256k1 key pair and returns the private key, Ethereum address, and Filecoin address.
+func NewAccount() (*key.Key, ethtypes.EthAddress, address.Address, error) {
 	key, err := key.GenerateKey(types.KTSecp256k1)
 	if err != nil {
-		log.Printf("Failed to generate key: %v", err)
-		return nil, ethtypes.EthAddress{}, address.Address{}
+		return nil, ethtypes.EthAddress{}, address.Address{}, fmt.Errorf("failed to generate key: %w", err)
 	}
 
 	ethAddr, err := ethtypes.EthAddressFromPubKey(key.PublicKey)
 	if err != nil {
-		log.Printf("Failed to generate Ethereum address: %v", err)
-		return nil, ethtypes.EthAddress{}, address.Address{}
+		return nil, ethtypes.EthAddress{}, address.Address{}, fmt.Errorf("failed to generate Ethereum address: %w", err)
 	}
 
 	ea, err := ethtypes.CastEthAddress(ethAddr)
 	if err != nil {
-		log.Printf("Failed to cast Ethereum address: %v", err)
-		return nil, ethtypes.EthAddress{}, address.Address{}
+		return nil, ethtypes.EthAddress{}, address.Address{}, fmt.Errorf("failed to cast Ethereum address: %w", err)
 	}
 
 	addr, err := ea.ToFilecoinAddress()
 	if err != nil {
-		log.Printf("Failed to convert Ethereum address to Filecoin address: %v", err)
-		return nil, ethtypes.EthAddress{}, address.Address{}
+		return nil, ethtypes.EthAddress{}, address.Address{}, fmt.Errorf("failed to convert Ethereum address to Filecoin address: %w", err)
 	}
-	return key, *(*ethtypes.EthAddress)(ethAddr), addr
+	return key, *(*ethtypes.EthAddress)(ethAddr), addr, nil
 }
 
 func appendEthereumKeyToFile(path string, key *key.Key, ethAddr ethtypes.EthAddress, filAddr address.Address) error {
@@ -81,16 +75,18 @@ func appendEthereumKeyToFile(path string, key *key.Key, ethAddr ethtypes.EthAddr
 }
 
 func CreateEthereumWallet(ctx context.Context, fund bool) (address.Address, error) {
-	key, ethAddr, addr := NewAccount()
+	_, ethAddr, addr, err := NewAccount()
+	if err != nil {
+		return address.Undef, fmt.Errorf("failed to create account: %w", err)
+	}
 	if fund {
 		_, err := FundWallet(ctx, addr, types.BigMul(types.NewInt(1e18), types.NewInt(1)), true)
 		if err != nil {
 			return address.Undef, fmt.Errorf("failed to fund wallet: %w", err)
 		}
 	}
-	log.Printf("Private Key: %s", key.PrivateKey)
-	log.Printf("Ethereum Address: %s", ethAddr)
-	log.Printf("Filecoin Address: %s", addr)
+	fmt.Printf("Ethereum Address: %s\n", ethAddr)
+	fmt.Printf("Filecoin Address: %s\n", addr)
 	return addr, nil
 }
 
@@ -182,20 +178,21 @@ var WalletCmd = &cli.Command{
 				// Parse fund amount if provided
 				var fundAmount abi.TokenAmount
 				if fundAmountStr != "" {
-					amount, _ := big.FromString(fundAmountStr)
-					// Convert FIL to attoFIL
+					amount, err := big.FromString(fundAmountStr)
+					if err != nil {
+						return fmt.Errorf("invalid fund amount '%s': %w", fundAmountStr, err)
+					}
 					fundAmount = types.BigMul(amount, types.NewInt(1e18))
 				}
 
 				if walletType == "ethereum" {
 					keyOutput := c.String("key-output")
-					// Create Ethereum wallets
 					fmt.Printf("Creating %d Ethereum wallet(s):\n", count)
 
 					for i := 0; i < count; i++ {
-						key, ethAddr, filAddr := NewAccount()
-						if key == nil {
-							return fmt.Errorf("failed to create wallet %d", i+1)
+						key, ethAddr, filAddr, err := NewAccount()
+						if err != nil {
+							return fmt.Errorf("failed to create wallet %d: %w", i+1, err)
 						}
 
 						fmt.Printf("\nWallet %d:\n", i+1)
@@ -311,9 +308,11 @@ var WalletCmd = &cli.Command{
 				}
 
 				amountStr := c.Args().Get(1)
-				amount, _ := big.FromString(amountStr)
+				amount, err := big.FromString(amountStr)
+				if err != nil {
+					return fmt.Errorf("invalid amount '%s': %w", amountStr, err)
+				}
 
-				// Convert FIL to attoFIL
 				fundAmount := types.BigMul(amount, types.NewInt(1e18))
 
 				smsg, err := FundWallet(ctx, addr, fundAmount, true)

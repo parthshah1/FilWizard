@@ -322,10 +322,13 @@ func (cm *ContractManager) CompileFoundryProject(project *ContractProject) error
 }
 
 func (cm *ContractManager) CreateDeployerAccount() (string, ethtypes.EthAddress, error) {
-	key, ethAddr, filAddr := NewAccount()
+	key, ethAddr, filAddr, err := NewAccount()
+	if err != nil {
+		return "", ethtypes.EthAddress{}, fmt.Errorf("failed to create account: %w", err)
+	}
 
 	fundAmount := types.FromFil(10)
-	_, err := FundWallet(context.Background(), filAddr, fundAmount, true)
+	_, err = FundWallet(context.Background(), filAddr, fundAmount, true)
 	if err != nil {
 		return "", ethtypes.EthAddress{}, fmt.Errorf("failed to fund deployer account: %w", err)
 	}
