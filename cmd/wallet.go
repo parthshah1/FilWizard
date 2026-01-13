@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -59,19 +60,56 @@ func NewAccount() (*key.Key, ethtypes.EthAddress, address.Address, error) {
 	return key, *(*ethtypes.EthAddress)(ethAddr), addr, nil
 }
 
-func appendEthereumKeyToFile(path string, key *key.Key, ethAddr ethtypes.EthAddress, filAddr address.Address) error {
+func appendEthereumKeyToJSONFile(path string, name string, key *key.Key, ethAddr ethtypes.EthAddress, filAddr address.Address) error {
 	if key == nil {
 		return fmt.Errorf("key is nil")
 	}
 
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	// Read existing file or create new structure
+	var accountsFile AccountsFile
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		if os.IsNotExist(err) {
+			// File doesn't exist, create new structure
+			accountsFile = AccountsFile{
+				Accounts: make(map[string]AccountInfo),
+			}
+		} else {
+			return fmt.Errorf("failed to read file: %w", err)
+		}
+	} else {
+		// Parse existing JSON
+		if err := json.Unmarshal(data, &accountsFile); err != nil {
+			return fmt.Errorf("failed to parse JSON: %w", err)
+		}
+		if accountsFile.Accounts == nil {
+			accountsFile.Accounts = make(map[string]AccountInfo)
+		}
 	}
-	defer file.Close()
 
-	_, err = fmt.Fprintf(file, "Ethereum Address: %s\nFilecoin Address: %s\nPrivate Key: 0x%x\n---\n", ethAddr.String(), filAddr.String(), key.PrivateKey)
-	return err
+	// Check if name already exists
+	if _, exists := accountsFile.Accounts[name]; exists {
+		return fmt.Errorf("account with name '%s' already exists", name)
+	}
+
+	// Add new account
+	accountsFile.Accounts[name] = AccountInfo{
+		Address:    filAddr.String(),
+		EthAddress: ethAddr.String(),
+		PrivateKey: fmt.Sprintf("0x%x", key.PrivateKey),
+	}
+
+	// Write back to file
+	updatedData, err := json.MarshalIndent(accountsFile, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	if err := os.WriteFile(path, updatedData, 0600); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return nil
 }
 
 func CreateEthereumWallet(ctx context.Context, fund bool) (address.Address, error) {
@@ -163,7 +201,11 @@ var WalletCmd = &cli.Command{
 				},
 				&cli.StringFlag{
 					Name:  "key-output",
-					Usage: "File to append generated private keys (Ethereum wallets)",
+					Usage: "JSON file to append generated accounts (Ethereum wallets)",
+				},
+				&cli.StringFlag{
+					Name:  "name",
+					Usage: "Account name for generated wallet (required with --key-output)",
 				},
 			},
 			Action: func(c *cli.Context) error {
@@ -187,6 +229,13 @@ var WalletCmd = &cli.Command{
 
 				if walletType == "ethereum" {
 					keyOutput := c.String("key-output")
+					accountName := c.String("name")
+
+					// Validate name is provided when key-output is specified
+					if keyOutput != "" && accountName == "" {
+						return fmt.Errorf("--name is required when using --key-output")
+					}
+
 					fmt.Printf("Creating %d Ethereum wallet(s):\n", count)
 
 					for i := 0; i < count; i++ {
@@ -204,10 +253,15 @@ var WalletCmd = &cli.Command{
 						}
 
 						if keyOutput != "" {
-							if err := appendEthereumKeyToFile(keyOutput, key, ethAddr, filAddr); err != nil {
+							// Generate account name with suffix for multiple wallets
+							name := accountName
+							if count > 1 {
+								name = fmt.Sprintf("%s_%d", accountName, i+1)
+							}
+							if err := appendEthereumKeyToJSONFile(keyOutput, name, key, ethAddr, filAddr); err != nil {
 								return fmt.Errorf("failed to write key to %s: %w", keyOutput, err)
 							}
-							fmt.Printf("  Saved key material to %s\n", keyOutput)
+							fmt.Printf("  Saved account '%s' to %s\n", name, keyOutput)
 						}
 
 						// Fund wallet if amount specified
