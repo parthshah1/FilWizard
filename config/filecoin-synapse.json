@@ -59,7 +59,7 @@
     {
       "name": "FilecoinWarmStorage",
       "project_type": "foundry",
-      "git_url": "https://github.com/parthshah1/filecoin-services.git",
+      "git_url": "https://github.com/FilOzone/filecoin-services.git",
       "git_ref": "main",
       "main_contract": "FilecoinWarmStorageService",
       "constructor_args": [],
@@ -77,7 +77,8 @@
         "SERVICE_NAME": "Synapse",
         "SERVICE_DESCRIPTION": "Synapse Service",
         "DRY_RUN": "false",
-        "USDFC_TOKEN_ADDRESS": "{address:USDFC}"
+        "USDFC_TOKEN_ADDRESS": "{address:USDFC}",
+        "AUTO_VERIFY": "false"
       },
       "exports": {
         "FILECOIN_WARM_STORAGE_ADDRESS": "self"

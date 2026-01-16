@@ -2,10 +2,16 @@ package cmd
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
+	"github.com/ethereum/go-ethereum/accounts/keystore"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/filecoin-project/go-address"
 	"github.com/filecoin-project/go-state-types/abi"
 	"github.com/filecoin-project/go-state-types/big"
@@ -166,6 +172,76 @@ func FundWallet(ctx context.Context, to address.Address, amount abi.TokenAmount,
 	}
 
 	return smsg, nil
+}
+
+// CreateEthKeystore creates an Ethereum keystore file from a private key
+// Returns the path to the created keystore file and the address
+func CreateEthKeystore(privateKey *ecdsa.PrivateKey, password string, outputDir string) (string, string, error) {
+	if err := os.MkdirAll(outputDir, 0700); err != nil {
+		return "", "", fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	ks := keystore.NewKeyStore(outputDir, keystore.StandardScryptN, keystore.StandardScryptP)
+
+	account, err := ks.ImportECDSA(privateKey, password)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to create keystore: %w", err)
+	}
+
+	// Find the created keystore file
+	files, err := os.ReadDir(outputDir)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to read output directory: %w", err)
+	}
+
+	// Find the newest file with the account address in its name
+	addrLower := strings.ToLower(account.Address.Hex()[2:])
+	var keystoreFile string
+	for _, f := range files {
+		if strings.Contains(strings.ToLower(f.Name()), addrLower) {
+			keystoreFile = filepath.Join(outputDir, f.Name())
+			break
+		}
+	}
+
+	if keystoreFile == "" {
+		return "", "", fmt.Errorf("keystore file not found after creation")
+	}
+
+	return keystoreFile, account.Address.Hex(), nil
+}
+
+// CreateEthKeystoreFromHex creates an Ethereum keystore from a hex-encoded private key
+func CreateEthKeystoreFromHex(privateKeyHex string, password string, outputDir string) (string, string, error) {
+	privateKeyHex = strings.TrimPrefix(privateKeyHex, "0x")
+
+	privateKeyBytes, err := hex.DecodeString(privateKeyHex)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to decode private key: %w", err)
+	}
+
+	privateKey, err := crypto.ToECDSA(privateKeyBytes)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to parse private key: %w", err)
+	}
+
+	return CreateEthKeystore(privateKey, password, outputDir)
+}
+
+// GenerateNewEthKeystore creates a new Ethereum keystore with a fresh key
+func GenerateNewEthKeystore(password string, outputDir string) (string, string, string, error) {
+	privateKey, err := crypto.GenerateKey()
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to generate key: %w", err)
+	}
+
+	keystoreFile, address, err := CreateEthKeystore(privateKey, password, outputDir)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	privateKeyHex := hex.EncodeToString(crypto.FromECDSA(privateKey))
+	return keystoreFile, address, privateKeyHex, nil
 }
 
 var WalletCmd = &cli.Command{
@@ -403,6 +479,104 @@ var WalletCmd = &cli.Command{
 				// Convert attoFIL to FIL for display
 				filBalance := types.BigDiv(balance, types.NewInt(1e18))
 				fmt.Printf("Balance for %s: %s FIL (%s attoFIL)\n", addr, filBalance.String(), balance.String())
+				return nil
+			},
+		},
+		{
+			Name:  "eth-keystore",
+			Usage: "Create Ethereum keystore file (for use with forge/cast tools)",
+			Flags: []cli.Flag{
+				&cli.StringFlag{
+					Name:     "password",
+					Usage:    "Password to encrypt the keystore (required)",
+					Required: true,
+				},
+				&cli.StringFlag{
+					Name:  "output",
+					Value: ".",
+					Usage: "Output directory for keystore file",
+				},
+				&cli.StringFlag{
+					Name:  "private-key",
+					Usage: "Existing private key to convert (hex format, with or without 0x prefix). If not provided, generates new key",
+				},
+				&cli.StringFlag{
+					Name:  "from-accounts",
+					Usage: "Path to accounts JSON file to extract private key from (use with --account-name)",
+				},
+				&cli.StringFlag{
+					Name:  "account-name",
+					Usage: "Account name to extract from accounts JSON file (use with --from-accounts)",
+				},
+				&cli.BoolFlag{
+					Name:  "show-private-key",
+					Usage: "Show the private key in output (only for newly generated keys)",
+				},
+			},
+			Action: func(c *cli.Context) error {
+				password := c.String("password")
+				outputDir := c.String("output")
+				privateKeyHex := c.String("private-key")
+				fromAccounts := c.String("from-accounts")
+				accountName := c.String("account-name")
+				showPrivateKey := c.Bool("show-private-key")
+
+				// Validate mutually exclusive options
+				if privateKeyHex != "" && fromAccounts != "" {
+					return fmt.Errorf("--private-key and --from-accounts are mutually exclusive")
+				}
+
+				// Handle --from-accounts option
+				if fromAccounts != "" {
+					if accountName == "" {
+						return fmt.Errorf("--account-name is required when using --from-accounts")
+					}
+
+					data, err := os.ReadFile(fromAccounts)
+					if err != nil {
+						return fmt.Errorf("failed to read accounts file: %w", err)
+					}
+
+					var accountsFile AccountsFile
+					if err := json.Unmarshal(data, &accountsFile); err != nil {
+						return fmt.Errorf("failed to parse accounts file: %w", err)
+					}
+
+					account, exists := accountsFile.Accounts[accountName]
+					if !exists {
+						return fmt.Errorf("account '%s' not found in accounts file", accountName)
+					}
+
+					privateKeyHex = account.PrivateKey
+					fmt.Printf("Extracting key for account '%s' (address: %s)\n", accountName, account.EthAddress)
+				}
+
+				if privateKeyHex != "" {
+					keystoreFile, address, err := CreateEthKeystoreFromHex(privateKeyHex, password, outputDir)
+					if err != nil {
+						return err
+					}
+					fmt.Printf("Created ETH keystore from existing key:\n")
+					fmt.Printf("  Address: %s\n", address)
+					fmt.Printf("  Keystore: %s\n", keystoreFile)
+				} else {
+					keystoreFile, address, privKey, err := GenerateNewEthKeystore(password, outputDir)
+					if err != nil {
+						return err
+					}
+					fmt.Printf("Generated new ETH keystore:\n")
+					fmt.Printf("  Address: %s\n", address)
+					fmt.Printf("  Keystore: %s\n", keystoreFile)
+					if showPrivateKey {
+						fmt.Printf("  Private Key: 0x%s\n", privKey)
+					}
+				}
+
+				fmt.Printf("\nUsage with forge/cast:\n")
+				fmt.Printf("  export ETH_KEYSTORE=<keystore-file-path>\n")
+				fmt.Printf("  export PASSWORD=<your-password>\n")
+				fmt.Printf("  cast wallet address --password \"$PASSWORD\"\n")
+
 				return nil
 			},
 		},
