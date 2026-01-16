@@ -78,14 +78,17 @@ var PaymentsCmd = &cli.Command{
 			Usage: "Mint tokens and optionally fund FIL for a raw private key",
 			Flags: []cli.Flag{
 				&cli.StringFlag{
-					Name:     "workspace",
-					Usage:    "Workspace directory",
-					Required: true,
+					Name:  "workspace",
+					Usage: "Workspace directory (optional if --contract-address is provided)",
 				},
 				&cli.StringFlag{
 					Name:  "token",
 					Usage: "Token contract name",
 					Value: "USDFC",
+				},
+				&cli.StringFlag{
+					Name:  "contract-address",
+					Usage: "Token contract address (overrides workspace lookup)",
 				},
 				&cli.StringFlag{
 					Name:     "private-key",
@@ -104,7 +107,7 @@ var PaymentsCmd = &cli.Command{
 				},
 				&cli.StringFlag{
 					Name:  "minter-private-key",
-					Usage: "Override minter private key (defaults to token deployer)",
+					Usage: "Minter private key (required if --contract-address is used)",
 				},
 			},
 			Action: mintAndFundPrivateKey,
@@ -336,14 +339,12 @@ func mintTokens(c *cli.Context) error {
 func mintAndFundPrivateKey(c *cli.Context) error {
 	workspace := c.String("workspace")
 	tokenName := c.String("token")
+	contractAddress := c.String("contract-address")
 	recipientKey := c.String("private-key")
 	amountStr := c.String("amount")
 	filAmountStr := strings.TrimSpace(c.String("fil"))
 	minterKey := c.String("minter-private-key")
 
-	if workspace == "" {
-		return fmt.Errorf("workspace is required")
-	}
 	if tokenName == "" {
 		tokenName = "USDFC"
 	}
@@ -354,20 +355,50 @@ func mintAndFundPrivateKey(c *cli.Context) error {
 		return fmt.Errorf("amount is required")
 	}
 
-	deployments, err := loadDeployments(workspace)
-	if err != nil {
-		return err
-	}
+	var tokenAddr string
+	var tokenABI []byte
 
-	tokenRecord, err := findContract(deployments, tokenName)
-	if err != nil {
-		return err
-	}
-
-	if minterKey == "" {
-		minterKey = tokenRecord.PrivateKey
+	if contractAddress != "" {
+		// Direct contract address provided - use standard ERC20 ABI for mint
+		tokenAddr = contractAddress
 		if minterKey == "" {
-			return fmt.Errorf("deployment record for %s is missing deployer private key; supply --minter-private-key", tokenName)
+			return fmt.Errorf("--minter-private-key is required when using --contract-address")
+		}
+		// Standard ERC20 mint ABI
+		tokenABI = []byte(`[{"inputs":[{"name":"to","type":"address"},{"name":"amount","type":"uint256"}],"name":"mint","outputs":[],"stateMutability":"nonpayable","type":"function"}]`)
+	} else {
+		// Use workspace deployments
+		if workspace == "" {
+			return fmt.Errorf("either --workspace or --contract-address is required")
+		}
+
+		deployments, err := loadDeployments(workspace)
+		if err != nil {
+			return err
+		}
+
+		tokenRecord, err := findContract(deployments, tokenName)
+		if err != nil {
+			// Try case-insensitive match
+			tokenRecord, err = findContractIgnoreCase(deployments, tokenName)
+			if err != nil {
+				return err
+			}
+		}
+
+		tokenAddr = tokenRecord.Address
+
+		if minterKey == "" {
+			minterKey = tokenRecord.PrivateKey
+			if minterKey == "" {
+				return fmt.Errorf("deployment record for %s is missing deployer private key; supply --minter-private-key", tokenName)
+			}
+		}
+
+		tokenABI, err = os.ReadFile(tokenRecord.ABIPath)
+		if err != nil {
+			// Fall back to standard ERC20 mint ABI
+			tokenABI = []byte(`[{"inputs":[{"name":"to","type":"address"},{"name":"amount","type":"uint256"}],"name":"mint","outputs":[],"stateMutability":"nonpayable","type":"function"}]`)
 		}
 	}
 
@@ -386,11 +417,6 @@ func mintAndFundPrivateKey(c *cli.Context) error {
 		return fmt.Errorf("invalid amount: %s", amountStr)
 	}
 
-	tokenABI, err := os.ReadFile(tokenRecord.ABIPath)
-	if err != nil {
-		return fmt.Errorf("failed to read ABI: %w", err)
-	}
-
 	client, err := ethclient.Dial(cfg.RPC)
 	if err != nil {
 		return fmt.Errorf("failed to connect: %w", err)
@@ -406,7 +432,7 @@ func mintAndFundPrivateKey(c *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	contract := bind.NewBoundContract(common.HexToAddress(tokenRecord.Address), parsedABI, client, client, client)
+	contract := bind.NewBoundContract(common.HexToAddress(tokenAddr), parsedABI, client, client, client)
 
 	recipientEthAddr := crypto.PubkeyToAddress(recipientECDSA.PublicKey)
 
@@ -871,6 +897,15 @@ func loadAccounts(workspace string) (*AccountsFile, error) {
 func findContract(deployments []DeploymentRecord, name string) (*DeploymentRecord, error) {
 	for i := range deployments {
 		if deployments[i].Name == name {
+			return &deployments[i], nil
+		}
+	}
+	return nil, fmt.Errorf("contract '%s' not found", name)
+}
+
+func findContractIgnoreCase(deployments []DeploymentRecord, name string) (*DeploymentRecord, error) {
+	for i := range deployments {
+		if strings.EqualFold(deployments[i].Name, name) {
 			return &deployments[i], nil
 		}
 	}
