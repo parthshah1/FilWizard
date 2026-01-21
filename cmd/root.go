@@ -68,6 +68,7 @@ func NewApp() *cli.App {
 			ContractCmd,
 			AccountsCmd,
 			PaymentsCmd,
+			SynapseCmd,
 		},
 	}
 	return app
