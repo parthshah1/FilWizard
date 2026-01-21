@@ -27,17 +27,22 @@ var SynapseCmd = &cli.Command{
 				&cli.StringFlag{
 					Name:    "warm-storage",
 					Usage:   "WarmStorage contract address",
-					EnvVars: []string{"WARM_STORAGE_ADDRESS", "LOCALNET_WARM_STORAGE_CONTRACT_ADDRESS"},
+					EnvVars: []string{"LOCALNET_WARM_STORAGE_CONTRACT_ADDRESS", "WARM_STORAGE_ADDRESS"},
 				},
 				&cli.StringFlag{
 					Name:    "payments",
 					Usage:   "FilecoinPayV1 contract address",
-					EnvVars: []string{"PAYMENTS_ADDRESS", "LOCALNET_PAYMENTS_ADDRESS"},
+					EnvVars: []string{"LOCALNET_PAYMENTS_ADDRESS", "PAYMENTS_ADDRESS"},
 				},
 				&cli.StringFlag{
 					Name:    "pdp-verifier",
 					Usage:   "PDPVerifier contract address",
-					EnvVars: []string{"PDP_VERIFIER_ADDRESS", "LOCALNET_PDP_VERIFIER_ADDRESS"},
+					EnvVars: []string{"LOCALNET_PDP_VERIFIER_ADDRESS", "PDP_VERIFIER_ADDRESS"},
+				},
+				&cli.StringFlag{
+					Name:    "rpc",
+					Usage:   "RPC URL (overrides global --rpc)",
+					EnvVars: []string{"LOCALNET_RPC_URL", "FILECOIN_RPC"},
 				},
 				&cli.IntFlag{
 					Name:  "duration",
@@ -83,11 +88,22 @@ func runMonitor(c *cli.Context) error {
 	warmStorageAddr := c.String("warm-storage")
 	paymentsAddr := c.String("payments")
 	pdpVerifierAddr := c.String("pdp-verifier")
+	rpcURL := c.String("rpc")
 	duration := c.Int("duration")
 	output := c.String("output")
 
-	if warmStorageAddr == "" || paymentsAddr == "" || pdpVerifierAddr == "" {
-		return fmt.Errorf("contract addresses required: --warm-storage, --payments, --pdp-verifier")
+	// Validate required parameters
+	if warmStorageAddr == "" {
+		return fmt.Errorf("warm-storage address required (--warm-storage or LOCALNET_WARM_STORAGE_CONTRACT_ADDRESS)")
+	}
+	if paymentsAddr == "" {
+		return fmt.Errorf("payments address required (--payments or LOCALNET_PAYMENTS_ADDRESS)")
+	}
+	if pdpVerifierAddr == "" {
+		return fmt.Errorf("pdp-verifier address required (--pdp-verifier or LOCALNET_PDP_VERIFIER_ADDRESS)")
+	}
+	if rpcURL == "" {
+		return fmt.Errorf("rpc URL required (--rpc or LOCALNET_RPC_URL)")
 	}
 
 	contracts := synapse.ContractAddresses{
@@ -97,10 +113,13 @@ func runMonitor(c *cli.Context) error {
 	}
 
 	log.Println("[Synapse] Starting monitor...")
-	log.Printf("[Synapse] RPC: %s", cfg.RPC)
+	log.Printf("[Synapse] RPC: %s", rpcURL)
+	log.Printf("[Synapse] WarmStorage: %s", warmStorageAddr)
+	log.Printf("[Synapse] Payments: %s", paymentsAddr)
+	log.Printf("[Synapse] PDPVerifier: %s", pdpVerifierAddr)
 	log.Printf("[Synapse] Output: %s", output)
 
-	monitor, err := synapse.NewSynapseMonitor(cfg.RPC, contracts)
+	monitor, err := synapse.NewSynapseMonitor(rpcURL, contracts)
 	if err != nil {
 		return fmt.Errorf("failed to create monitor: %w", err)
 	}
