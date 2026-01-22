@@ -1,0 +1,310 @@
+package synapse
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"math/big"
+	"strings"
+
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethclient"
+)
+
+// DataSetRails contains the payment rail IDs for a data set
+type DataSetRails struct {
+	PDPRailID       uint64
+	CDNRailID       uint64
+	CacheMissRailID uint64
+}
+
+// SettlementResult contains the result of a settlement operation
+type SettlementResult struct {
+	RailID      uint64
+	TxHash      string
+	BlockNumber uint64
+	Amount      string
+}
+
+// Settler handles payment settlement operations
+type Settler struct {
+	client      *ethclient.Client
+	warmStorage common.Address
+	payments    common.Address
+}
+
+// NewSettler creates a new Settler instance
+func NewSettler(rpcURL string, warmStorage, payments common.Address) (*Settler, error) {
+	client, err := ethclient.Dial(rpcURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to RPC: %w", err)
+	}
+
+	return &Settler{
+		client:      client,
+		warmStorage: warmStorage,
+		payments:    payments,
+	}, nil
+}
+
+// GetDataSetRails fetches the payment rail IDs for a data set
+func (s *Settler) GetDataSetRails(ctx context.Context, dataSetID uint64) (*DataSetRails, error) {
+	// ABI for getDataSet function
+	// getDataSet(uint256) returns (tuple with pdpRailId, cdnRailId, cacheMissRailId)
+	const getDataSetABI = `[{
+		"inputs": [{"name": "dataSetId", "type": "uint256"}],
+		"name": "getDataSet",
+		"outputs": [{
+			"components": [
+				{"name": "payer", "type": "address"},
+				{"name": "serviceProvider", "type": "address"},
+				{"name": "providerId", "type": "uint256"},
+				{"name": "pdpRailId", "type": "uint256"},
+				{"name": "cdnRailId", "type": "uint256"},
+				{"name": "cacheMissRailId", "type": "uint256"},
+				{"name": "pdpServiceState", "type": "uint8"},
+				{"name": "cdnServiceState", "type": "uint8"}
+			],
+			"name": "",
+			"type": "tuple"
+		}],
+		"stateMutability": "view",
+		"type": "function"
+	}]`
+
+	parsed, err := abi.JSON(strings.NewReader(getDataSetABI))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse ABI: %w", err)
+	}
+
+	callData, err := parsed.Pack("getDataSet", big.NewInt(int64(dataSetID)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to pack call data: %w", err)
+	}
+
+	result, err := s.client.CallContract(ctx, ethereum.CallMsg{
+		To:   &s.warmStorage,
+		Data: callData,
+	}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call getDataSet: %w", err)
+	}
+
+	// Unpack the result
+	unpacked, err := parsed.Unpack("getDataSet", result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unpack result: %w", err)
+	}
+
+	// The result is a struct, we need to extract the rail IDs
+	// The struct fields are in order: payer, serviceProvider, providerId, pdpRailId, cdnRailId, cacheMissRailId, pdpServiceState, cdnServiceState
+	if len(unpacked) == 0 {
+		return nil, fmt.Errorf("empty result from getDataSet")
+	}
+
+	// Type assertion to get the struct
+	dataSetStruct, ok := unpacked[0].(struct {
+		Payer           common.Address `json:"payer"`
+		ServiceProvider common.Address `json:"serviceProvider"`
+		ProviderId      *big.Int       `json:"providerId"`
+		PdpRailId       *big.Int       `json:"pdpRailId"`
+		CdnRailId       *big.Int       `json:"cdnRailId"`
+		CacheMissRailId *big.Int       `json:"cacheMissRailId"`
+		PdpServiceState uint8          `json:"pdpServiceState"`
+		CdnServiceState uint8          `json:"cdnServiceState"`
+	})
+	if !ok {
+		return nil, fmt.Errorf("unexpected result type from getDataSet")
+	}
+
+	return &DataSetRails{
+		PDPRailID:       dataSetStruct.PdpRailId.Uint64(),
+		CDNRailID:       dataSetStruct.CdnRailId.Uint64(),
+		CacheMissRailID: dataSetStruct.CacheMissRailId.Uint64(),
+	}, nil
+}
+
+// SettleRail settles a single payment rail
+func (s *Settler) SettleRail(ctx context.Context, privateKey string, railID uint64) (*SettlementResult, error) {
+	if railID == 0 {
+		return nil, fmt.Errorf("invalid rail ID: 0")
+	}
+
+	// Parse private key
+	key, err := crypto.HexToECDSA(strings.TrimPrefix(privateKey, "0x"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid private key: %w", err)
+	}
+
+	// Get chain ID
+	chainID, err := s.client.ChainID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get chain ID: %w", err)
+	}
+
+	// Create transactor
+	_, err = bind.NewKeyedTransactorWithChainID(key, chainID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create transactor: %w", err)
+	}
+
+	// ABI for settle function
+	// settle(uint256 railId) - settles up to current epoch
+	const settleABI = `[{
+		"inputs": [{"name": "railId", "type": "uint256"}],
+		"name": "settle",
+		"outputs": [],
+		"stateMutability": "payable",
+		"type": "function"
+	}]`
+
+	parsed, err := abi.JSON(strings.NewReader(settleABI))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse ABI: %w", err)
+	}
+
+	callData, err := parsed.Pack("settle", big.NewInt(int64(railID)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to pack call data: %w", err)
+	}
+
+	// Get nonce
+	fromAddress := crypto.PubkeyToAddress(key.PublicKey)
+	nonce, err := s.client.PendingNonceAt(ctx, fromAddress)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get nonce: %w", err)
+	}
+
+	// Get gas price
+	gasPrice, err := s.client.SuggestGasPrice(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get gas price: %w", err)
+	}
+
+	// Estimate gas
+	gasLimit, err := s.client.EstimateGas(ctx, ethereum.CallMsg{
+		From:  fromAddress,
+		To:    &s.payments,
+		Data:  callData,
+		Value: big.NewInt(1300000000000000), // 0.0013 FIL settlement fee
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to estimate gas: %w", err)
+	}
+
+	// Create transaction
+	tx := types.NewTransaction(
+		nonce,
+		s.payments,
+		big.NewInt(1300000000000000), // 0.0013 FIL settlement fee
+		gasLimit,
+		gasPrice,
+		callData,
+	)
+
+	// Sign transaction
+	signedTx, err := types.SignTx(tx, types.NewEIP155Signer(chainID), key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign transaction: %w", err)
+	}
+
+	// Send transaction
+	if err := s.client.SendTransaction(ctx, signedTx); err != nil {
+		return nil, fmt.Errorf("failed to send transaction: %w", err)
+	}
+
+	log.Printf("[Settler] Settlement tx sent for rail %d: %s", railID, signedTx.Hash().Hex())
+
+	// Wait for receipt
+	receipt, err := bind.WaitMined(ctx, s.client, signedTx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to wait for transaction: %w", err)
+	}
+
+	if receipt.Status != types.ReceiptStatusSuccessful {
+		return nil, fmt.Errorf("settlement transaction failed")
+	}
+
+	log.Printf("[Settler] Settlement confirmed for rail %d in block %d", railID, receipt.BlockNumber.Uint64())
+
+	// Try to extract amount from logs
+	amount := "0"
+	for _, vLog := range receipt.Logs {
+		if len(vLog.Topics) > 0 && vLog.Topics[0] == RailSettledTopic {
+			if len(vLog.Data) >= 32 {
+				amount = new(big.Int).SetBytes(vLog.Data[0:32]).String()
+			}
+			break
+		}
+	}
+
+	return &SettlementResult{
+		RailID:      railID,
+		TxHash:      signedTx.Hash().Hex(),
+		BlockNumber: receipt.BlockNumber.Uint64(),
+		Amount:      amount,
+	}, nil
+}
+
+// SettleDataSet settles all payment rails for a data set
+func (s *Settler) SettleDataSet(ctx context.Context, privateKey string, dataSetID uint64) ([]*SettlementResult, error) {
+	// Get rail IDs
+	rails, err := s.GetDataSetRails(ctx, dataSetID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get data set rails: %w", err)
+	}
+
+	log.Printf("[Settler] Data set %d rails: PDP=%d, CDN=%d, CacheMiss=%d",
+		dataSetID, rails.PDPRailID, rails.CDNRailID, rails.CacheMissRailID)
+
+	var results []*SettlementResult
+
+	// Settle PDP rail
+	if rails.PDPRailID > 0 {
+		log.Printf("[Settler] Settling PDP rail %d...", rails.PDPRailID)
+		result, err := s.SettleRail(ctx, privateKey, rails.PDPRailID)
+		if err != nil {
+			log.Printf("[Settler] Warning: Failed to settle PDP rail: %v", err)
+		} else {
+			results = append(results, result)
+		}
+	}
+
+	// Settle CDN rail (if exists)
+	if rails.CDNRailID > 0 {
+		log.Printf("[Settler] Settling CDN rail %d...", rails.CDNRailID)
+		result, err := s.SettleRail(ctx, privateKey, rails.CDNRailID)
+		if err != nil {
+			log.Printf("[Settler] Warning: Failed to settle CDN rail: %v", err)
+		} else {
+			results = append(results, result)
+		}
+	}
+
+	// Settle CacheMiss rail (if exists)
+	if rails.CacheMissRailID > 0 {
+		log.Printf("[Settler] Settling CacheMiss rail %d...", rails.CacheMissRailID)
+		result, err := s.SettleRail(ctx, privateKey, rails.CacheMissRailID)
+		if err != nil {
+			log.Printf("[Settler] Warning: Failed to settle CacheMiss rail: %v", err)
+		} else {
+			results = append(results, result)
+		}
+	}
+
+	if len(results) == 0 {
+		return nil, fmt.Errorf("no rails were settled")
+	}
+
+	return results, nil
+}
+
+// Close closes the client connection
+func (s *Settler) Close() {
+	s.client.Close()
+}

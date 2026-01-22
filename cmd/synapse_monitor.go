@@ -81,6 +81,38 @@ var SynapseCmd = &cli.Command{
 			},
 			Action: runSummary,
 		},
+		{
+			Name:  "settle",
+			Usage: "Settle payment rails for a data set",
+			Flags: []cli.Flag{
+				&cli.Uint64Flag{
+					Name:     "data-set-id",
+					Usage:    "Data set ID to settle",
+					Required: true,
+				},
+				&cli.StringFlag{
+					Name:    "warm-storage",
+					Usage:   "WarmStorage contract address",
+					EnvVars: []string{"LOCALNET_WARM_STORAGE_CONTRACT_ADDRESS", "WARM_STORAGE_ADDRESS"},
+				},
+				&cli.StringFlag{
+					Name:    "payments",
+					Usage:   "FilecoinPayV1 contract address",
+					EnvVars: []string{"LOCALNET_PAYMENTS_ADDRESS", "PAYMENTS_ADDRESS"},
+				},
+				&cli.StringFlag{
+					Name:    "rpc",
+					Usage:   "RPC URL",
+					EnvVars: []string{"LOCALNET_RPC_URL", "FILECOIN_RPC"},
+				},
+				&cli.StringFlag{
+					Name:    "private-key",
+					Usage:   "Private key for signing transactions",
+					EnvVars: []string{"CLIENT_PRIVATE_KEY", "SP_PRIVATE_KEY", "PRIVATE_KEY"},
+				},
+			},
+			Action: runSettle,
+		},
 	},
 }
 
@@ -216,6 +248,61 @@ func runSummary(c *cli.Context) error {
 	} else {
 		fmt.Println("⚠️  No settlements")
 	}
+
+	return nil
+}
+
+func runSettle(c *cli.Context) error {
+	dataSetID := c.Uint64("data-set-id")
+	warmStorageAddr := c.String("warm-storage")
+	paymentsAddr := c.String("payments")
+	rpcURL := c.String("rpc")
+	privateKey := c.String("private-key")
+
+	// Validate required parameters
+	if warmStorageAddr == "" {
+		return fmt.Errorf("warm-storage address required (--warm-storage or LOCALNET_WARM_STORAGE_CONTRACT_ADDRESS)")
+	}
+	if paymentsAddr == "" {
+		return fmt.Errorf("payments address required (--payments or LOCALNET_PAYMENTS_ADDRESS)")
+	}
+	if rpcURL == "" {
+		return fmt.Errorf("rpc URL required (--rpc or LOCALNET_RPC_URL)")
+	}
+	if privateKey == "" {
+		return fmt.Errorf("private-key required (--private-key or CLIENT_PRIVATE_KEY)")
+	}
+
+	log.Printf("[Synapse] Settling data set %d...", dataSetID)
+	log.Printf("[Synapse] RPC: %s", rpcURL)
+	log.Printf("[Synapse] WarmStorage: %s", warmStorageAddr)
+	log.Printf("[Synapse] Payments: %s", paymentsAddr)
+
+	// Create settler
+	settler, err := synapse.NewSettler(
+		rpcURL,
+		common.HexToAddress(warmStorageAddr),
+		common.HexToAddress(paymentsAddr),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create settler: %w", err)
+	}
+	defer settler.Close()
+
+	// Settle data set
+	ctx := context.Background()
+	results, err := settler.SettleDataSet(ctx, privateKey, dataSetID)
+	if err != nil {
+		return fmt.Errorf("settlement failed: %w", err)
+	}
+
+	// Print results
+	fmt.Println("=== Settlement Results ===")
+	for _, result := range results {
+		fmt.Printf("Rail %d: tx=%s, block=%d, amount=%s\n",
+			result.RailID, result.TxHash, result.BlockNumber, result.Amount)
+	}
+	fmt.Printf("\n✓ Settled %d rail(s) for data set %d\n", len(results), dataSetID)
 
 	return nil
 }

@@ -149,12 +149,17 @@ func (m *SynapseMonitor) processLog(vLog types.Log) {
 }
 
 // handleFaultRecord processes FaultRecord events - CRITICAL invariant violation
+// Event: FaultRecord(uint256 indexed dataSetId, uint256 periodsFaulted, uint256 deadline)
 func (m *SynapseMonitor) handleFaultRecord(vLog types.Log) {
 	var dataSetId, periodsFaulted uint64
 
-	if len(vLog.Data) >= 64 {
-		dataSetId = new(big.Int).SetBytes(vLog.Data[0:32]).Uint64()
-		periodsFaulted = new(big.Int).SetBytes(vLog.Data[32:64]).Uint64()
+	// dataSetId is indexed, so it's in Topics[1]
+	if len(vLog.Topics) > 1 {
+		dataSetId = new(big.Int).SetBytes(vLog.Topics[1].Bytes()).Uint64()
+	}
+	// periodsFaulted and deadline are non-indexed, in Data
+	if len(vLog.Data) >= 32 {
+		periodsFaulted = new(big.Int).SetBytes(vLog.Data[0:32]).Uint64()
 	}
 
 	log.Printf("[SynapseMonitor] ⚠️ FAULT RECORD: dataSetId=%d, periodsFaulted=%d, block=%d, tx=%s",
@@ -178,16 +183,24 @@ func (m *SynapseMonitor) handlePieceAdded(vLog types.Log) {
 }
 
 // handleRailSettled processes RailSettled events - payment settlement
+// Event: RailSettled(uint256 indexed railId, uint256 totalSettledAmount, uint256 totalNetPayeeAmount, uint256 operatorCommission, uint256 networkFee, uint256 settledUpTo)
 func (m *SynapseMonitor) handleRailSettled(vLog types.Log) {
 	var railId, settledUpTo uint64
 	var amount string
 
+	// railId is indexed, so it's in Topics[1]
 	if len(vLog.Topics) > 1 {
 		railId = new(big.Int).SetBytes(vLog.Topics[1].Bytes()).Uint64()
 	}
-	if len(vLog.Data) >= 64 {
-		settledUpTo = new(big.Int).SetBytes(vLog.Data[0:32]).Uint64()
-		amount = new(big.Int).SetBytes(vLog.Data[32:64]).String()
+	// Non-indexed fields in Data:
+	// [0:32] totalSettledAmount
+	// [32:64] totalNetPayeeAmount
+	// [64:96] operatorCommission
+	// [96:128] networkFee
+	// [128:160] settledUpTo
+	if len(vLog.Data) >= 160 {
+		amount = new(big.Int).SetBytes(vLog.Data[0:32]).String() // totalSettledAmount
+		settledUpTo = new(big.Int).SetBytes(vLog.Data[128:160]).Uint64()
 	}
 
 	log.Printf("[SynapseMonitor] ✓ RAIL SETTLED: railId=%d, settledUpTo=%d, amount=%s, block=%d",
