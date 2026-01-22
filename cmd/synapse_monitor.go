@@ -92,8 +92,8 @@ var SynapseCmd = &cli.Command{
 				},
 				&cli.StringFlag{
 					Name:    "warm-storage",
-					Usage:   "WarmStorage contract address",
-					EnvVars: []string{"LOCALNET_WARM_STORAGE_CONTRACT_ADDRESS", "WARM_STORAGE_ADDRESS"},
+					Usage:   "WarmStorage View contract address (has getDataSet)",
+					EnvVars: []string{"LOCALNET_WARM_STORAGE_VIEW_ADDRESS", "WARM_STORAGE_VIEW_ADDRESS", "LOCALNET_WARM_STORAGE_CONTRACT_ADDRESS"},
 				},
 				&cli.StringFlag{
 					Name:    "payments",

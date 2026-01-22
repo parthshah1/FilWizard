@@ -54,23 +54,27 @@ func NewSettler(rpcURL string, warmStorage, payments common.Address) (*Settler, 
 
 // GetDataSetRails fetches the payment rail IDs for a data set
 func (s *Settler) GetDataSetRails(ctx context.Context, dataSetID uint64) (*DataSetRails, error) {
-	// ABI for getDataSet function
-	// getDataSet(uint256) returns (tuple with pdpRailId, cdnRailId, cacheMissRailId)
+	// ABI for getDataSet function on WarmStorage
+	// getDataSet(uint256 dataSetId) returns (DataSetInfoView)
+	// DataSetInfoView has fields: pdpRailId, cacheMissRailId, cdnRailId, payer, payee, serviceProvider, commissionBps, clientDataSetId, pdpEndEpoch, providerId, dataSetId
 	const getDataSetABI = `[{
 		"inputs": [{"name": "dataSetId", "type": "uint256"}],
 		"name": "getDataSet",
 		"outputs": [{
 			"components": [
-				{"name": "payer", "type": "address"},
-				{"name": "serviceProvider", "type": "address"},
-				{"name": "providerId", "type": "uint256"},
 				{"name": "pdpRailId", "type": "uint256"},
-				{"name": "cdnRailId", "type": "uint256"},
 				{"name": "cacheMissRailId", "type": "uint256"},
-				{"name": "pdpServiceState", "type": "uint8"},
-				{"name": "cdnServiceState", "type": "uint8"}
+				{"name": "cdnRailId", "type": "uint256"},
+				{"name": "payer", "type": "address"},
+				{"name": "payee", "type": "address"},
+				{"name": "serviceProvider", "type": "address"},
+				{"name": "commissionBps", "type": "uint256"},
+				{"name": "clientDataSetId", "type": "uint256"},
+				{"name": "pdpEndEpoch", "type": "uint256"},
+				{"name": "providerId", "type": "uint256"},
+				{"name": "dataSetId", "type": "uint256"}
 			],
-			"name": "",
+			"name": "info",
 			"type": "tuple"
 		}],
 		"stateMutability": "view",
@@ -95,37 +99,27 @@ func (s *Settler) GetDataSetRails(ctx context.Context, dataSetID uint64) (*DataS
 		return nil, fmt.Errorf("failed to call getDataSet: %w", err)
 	}
 
-	// Unpack the result
-	unpacked, err := parsed.Unpack("getDataSet", result)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unpack result: %w", err)
-	}
-
-	// The result is a struct, we need to extract the rail IDs
-	// The struct fields are in order: payer, serviceProvider, providerId, pdpRailId, cdnRailId, cacheMissRailId, pdpServiceState, cdnServiceState
-	if len(unpacked) == 0 {
+	if len(result) == 0 {
 		return nil, fmt.Errorf("empty result from getDataSet")
 	}
 
-	// Type assertion to get the struct
-	dataSetStruct, ok := unpacked[0].(struct {
-		Payer           common.Address `json:"payer"`
-		ServiceProvider common.Address `json:"serviceProvider"`
-		ProviderId      *big.Int       `json:"providerId"`
-		PdpRailId       *big.Int       `json:"pdpRailId"`
-		CdnRailId       *big.Int       `json:"cdnRailId"`
-		CacheMissRailId *big.Int       `json:"cacheMissRailId"`
-		PdpServiceState uint8          `json:"pdpServiceState"`
-		CdnServiceState uint8          `json:"cdnServiceState"`
-	})
-	if !ok {
-		return nil, fmt.Errorf("unexpected result type from getDataSet")
+	// The result is ABI encoded - decode the tuple manually
+	// Tuple layout: 11 fields, each 32 bytes
+	// [0-31] pdpRailId, [32-63] cacheMissRailId, [64-95] cdnRailId, ...
+	if len(result) < 352 { // 11 fields * 32 bytes
+		return nil, fmt.Errorf("result too short: got %d bytes, expected at least 352", len(result))
 	}
 
+	pdpRailId := new(big.Int).SetBytes(result[0:32]).Uint64()
+	cacheMissRailId := new(big.Int).SetBytes(result[32:64]).Uint64()
+	cdnRailId := new(big.Int).SetBytes(result[64:96]).Uint64()
+
+	log.Printf("[Settler] GetDataSetRails: pdp=%d, cacheMiss=%d, cdn=%d", pdpRailId, cacheMissRailId, cdnRailId)
+
 	return &DataSetRails{
-		PDPRailID:       dataSetStruct.PdpRailId.Uint64(),
-		CDNRailID:       dataSetStruct.CdnRailId.Uint64(),
-		CacheMissRailID: dataSetStruct.CacheMissRailId.Uint64(),
+		PDPRailID:       pdpRailId,
+		CDNRailID:       cdnRailId,
+		CacheMissRailID: cacheMissRailId,
 	}, nil
 }
 
