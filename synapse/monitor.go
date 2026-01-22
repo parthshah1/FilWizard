@@ -22,15 +22,17 @@ type ContractAddresses struct {
 }
 
 // Event topic signatures (keccak256 hashes) - only the 3 we care about
+// These MUST match the exact ABI signatures from the contracts
 var (
-	// FaultRecord(uint256 dataSetId, uint256 periodsFaulted)
-	FaultRecordTopic = crypto.Keccak256Hash([]byte("FaultRecord(uint256,uint256)"))
+	// FaultRecord(uint256 indexed dataSetId, uint256 periodsFaulted, uint256 deadline)
+	FaultRecordTopic = crypto.Keccak256Hash([]byte("FaultRecord(uint256,uint256,uint256)"))
 
-	// PieceAdded(uint256 indexed dataSetId, ...)
-	PieceAddedTopic = crypto.Keccak256Hash([]byte("PieceAdded(uint256)"))
+	// PieceAdded(uint256 indexed dataSetId, uint256 indexed pieceId, Cids.Cid pieceCid, string[] keys, string[] values)
+	// Note: Cids.Cid struct is encoded as (bytes) in the ABI
+	PieceAddedTopic = crypto.Keccak256Hash([]byte("PieceAdded(uint256,uint256,(bytes),string[],string[])"))
 
-	// RailSettled(uint256 indexed railId, uint256 settledUpTo, uint256 amount)
-	RailSettledTopic = crypto.Keccak256Hash([]byte("RailSettled(uint256,uint256,uint256)"))
+	// RailSettled(uint256 indexed railId, uint256 totalSettledAmount, uint256 totalNetPayeeAmount, uint256 operatorCommission, uint256 networkFee, uint256 settledUpTo)
+	RailSettledTopic = crypto.Keccak256Hash([]byte("RailSettled(uint256,uint256,uint256,uint256,uint256,uint256)"))
 )
 
 // SynapseMonitor monitors Synapse contract events and tracks invariants
