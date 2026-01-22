@@ -142,27 +142,43 @@ func (s *Settler) SettleRail(ctx context.Context, privateKey string, railID uint
 	}
 
 	// Create transactor
-	_, err = bind.NewKeyedTransactorWithChainID(key, chainID)
+	// Get current block to calculate current epoch
+	currentBlock, err := s.client.BlockNumber(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create transactor: %w", err)
+		return nil, fmt.Errorf("failed to get current block: %w", err)
 	}
+	// Use current block as epoch (devnet: 4 seconds/block, calibration: 30 seconds/block)
+	// For simplicity, we'll settle up to current epoch
+	untilEpoch := currentBlock
 
-	// ABI for settle function
-	// settle(uint256 railId) - settles up to current epoch
-	const settleABI = `[{
-		"inputs": [{"name": "railId", "type": "uint256"}],
-		"name": "settle",
-		"outputs": [],
-		"stateMutability": "payable",
+	log.Printf("[Settler] Settling rail %d up to epoch %d", railID, untilEpoch)
+
+	// ABI for settleRail function
+	// settleRail(uint256 railId, uint256 untilEpoch) returns (...)
+	const settleRailABI = `[{
+		"inputs": [
+			{"name": "railId", "type": "uint256"},
+			{"name": "untilEpoch", "type": "uint256"}
+		],
+		"name": "settleRail",
+		"outputs": [
+			{"name": "totalSettledAmount", "type": "uint256"},
+			{"name": "totalNetPayeeAmount", "type": "uint256"},
+			{"name": "totalOperatorCommission", "type": "uint256"},
+			{"name": "totalNetworkFee", "type": "uint256"},
+			{"name": "finalSettledEpoch", "type": "uint256"},
+			{"name": "note", "type": "string"}
+		],
+		"stateMutability": "nonpayable",
 		"type": "function"
 	}]`
 
-	parsed, err := abi.JSON(strings.NewReader(settleABI))
+	parsed, err := abi.JSON(strings.NewReader(settleRailABI))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse ABI: %w", err)
 	}
 
-	callData, err := parsed.Pack("settle", big.NewInt(int64(railID)))
+	callData, err := parsed.Pack("settleRail", big.NewInt(int64(railID)), big.NewInt(int64(untilEpoch)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to pack call data: %w", err)
 	}
@@ -180,22 +196,21 @@ func (s *Settler) SettleRail(ctx context.Context, privateKey string, railID uint
 		return nil, fmt.Errorf("failed to get gas price: %w", err)
 	}
 
-	// Estimate gas
+	// Estimate gas (settleRail is nonpayable, no value needed)
 	gasLimit, err := s.client.EstimateGas(ctx, ethereum.CallMsg{
-		From:  fromAddress,
-		To:    &s.payments,
-		Data:  callData,
-		Value: big.NewInt(1300000000000000), // 0.0013 FIL settlement fee
+		From: fromAddress,
+		To:   &s.payments,
+		Data: callData,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to estimate gas: %w", err)
 	}
 
-	// Create transaction
+	// Create transaction (no value - function is nonpayable)
 	tx := types.NewTransaction(
 		nonce,
 		s.payments,
-		big.NewInt(1300000000000000), // 0.0013 FIL settlement fee
+		big.NewInt(0), // No value for nonpayable function
 		gasLimit,
 		gasPrice,
 		callData,
