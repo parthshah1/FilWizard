@@ -51,16 +51,6 @@ var AccountsCmd = &cli.Command{
 	},
 }
 
-type AccountInfo struct {
-	Address    string `json:"address"`
-	EthAddress string `json:"ethAddress"`
-	PrivateKey string `json:"privateKey"`
-}
-
-type AccountsFile struct {
-	Accounts map[string]AccountInfo `json:"accounts"`
-}
-
 func createAccounts(c *cli.Context) error {
 	workspace := c.String("workspace")
 	roles := c.StringSlice("role")
