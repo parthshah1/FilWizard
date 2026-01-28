@@ -13,6 +13,7 @@ contracts/
 *.dylib
 *.test
 *.out
+*.xml
 
 # IDE
 .idea/

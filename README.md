@@ -1,6 +1,6 @@
 # FilWizard
 
-A comprehensive Filecoin testing tool designed for contract developers, ecosystem teams, and implementation teams to test, deploy, and interact with smart contracts on Filecoin networks. Specifically optimized for deterministic testing on platforms like Antithesis.
+A smart contract deployment and wallet management tool for Filecoin networks. Designed for contract developers, ecosystem teams, and implementation teams to deploy and interact with smart contracts.
 
 ## Overview
 
@@ -10,8 +10,6 @@ A comprehensive Filecoin testing tool designed for contract developers, ecosyste
 - **Advanced Configuration-Based Deployment**: Deploy complex contract ecosystems with dependency management, template variables, post-deployment actions, and custom scripts
 - **Automated Deployment**: Deploy contracts from Git repositories with full automation support
 - **Go Bindings Generation**: Generate Go bindings for deployed contracts using abigen
-
-This tool is particularly useful for testing Filecoin implementations in controlled, deterministic environments.
 
 ### Key Features
 
@@ -30,11 +28,6 @@ This tool is particularly useful for testing Filecoin implementations in control
 - Export contract addresses as environment variables
 - Support for custom deployment scripts
 - Import addresses from script output
-
-**Wallet Management:**
-- Create Filecoin (secp256k1, BLS) and Ethereum-style wallets
-- Fund wallets from the default node wallet
-- Check balances and list wallets
 
 ### Quick Start: Deploying Contracts
 
@@ -135,10 +128,10 @@ filwizard contract clone-config --config config/contracts.json
 filwizard contract deploy-local --config config/contracts.json --create-deployer
 ```
 
-### List Wallets
+### Fund a Wallet
 
 ```bash
-filwizard wallet list
+filwizard wallet fund <address> 10
 ```
 
 ## Contributing

@@ -1,7 +1,7 @@
 {
   "environment": {
     "CHAIN_ID": "31415926",
-    "RPC_URL": "http://lotus0:1234/rpc/v1"
+    "RPC_URL": "http://localhost:1234/rpc/v1"
   },
   "contracts": [
     {
@@ -59,7 +59,7 @@
     {
       "name": "FilecoinWarmStorage",
       "project_type": "foundry",
-      "git_url": "https://github.com/parthshah1/filecoin-services.git",
+      "git_url": "https://github.com/FilOzone/filecoin-services.git",
       "git_ref": "main",
       "main_contract": "FilecoinWarmStorageService",
       "constructor_args": [],
@@ -67,15 +67,18 @@
       "script_dir": "service_contracts",
       "deploy_script": "tools/deploy-all-warm-storage.sh",
       "clone_commands": [
-        "git submodule update --init --recursive"
+        "git submodule update --init --recursive",
+        "cd service_contracts && forge config --fix",
+        "cd service_contracts && forge build"
       ],
       "environment": {
-        "ETH_RPC_URL": "http://lotus0:1234/rpc/v1",
+        "ETH_RPC_URL": "http://localhost:1234/rpc/v1",
         "CHAIN": "31415926",
         "SERVICE_NAME": "Synapse",
         "SERVICE_DESCRIPTION": "Synapse Service",
         "DRY_RUN": "false",
-        "USDFC_TOKEN_ADDRESS": "{address:USDFC}"
+        "USDFC_TOKEN_ADDRESS": "{address:USDFC}",
+        "AUTO_VERIFY": "false"
       },
       "exports": {
         "FILECOIN_WARM_STORAGE_ADDRESS": "self"

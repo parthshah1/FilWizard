@@ -2,10 +2,16 @@ package cmd
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
-	"log"
 	"os"
+	"path/filepath"
+	"strings"
 
+	"github.com/ethereum/go-ethereum/accounts/keystore"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/filecoin-project/go-address"
 	"github.com/filecoin-project/go-state-types/abi"
 	"github.com/filecoin-project/go-state-types/big"
@@ -36,61 +42,95 @@ func ListWallets(ctx context.Context) ([]address.Address, error) {
 	return addrs, nil
 }
 
-// Returns the private key, Ethereum address, and Filecoin address
-func NewAccount() (*key.Key, ethtypes.EthAddress, address.Address) {
-	// Generate a secp256k1 key; this will back the Ethereum identity.
+// NewAccount generates a new secp256k1 key pair and returns the private key, Ethereum address, and Filecoin address.
+func NewAccount() (*key.Key, ethtypes.EthAddress, address.Address, error) {
 	key, err := key.GenerateKey(types.KTSecp256k1)
 	if err != nil {
-		log.Printf("Failed to generate key: %v", err)
-		return nil, ethtypes.EthAddress{}, address.Address{}
+		return nil, ethtypes.EthAddress{}, address.Address{}, fmt.Errorf("failed to generate key: %w", err)
 	}
 
 	ethAddr, err := ethtypes.EthAddressFromPubKey(key.PublicKey)
 	if err != nil {
-		log.Printf("Failed to generate Ethereum address: %v", err)
-		return nil, ethtypes.EthAddress{}, address.Address{}
+		return nil, ethtypes.EthAddress{}, address.Address{}, fmt.Errorf("failed to generate Ethereum address: %w", err)
 	}
 
 	ea, err := ethtypes.CastEthAddress(ethAddr)
 	if err != nil {
-		log.Printf("Failed to cast Ethereum address: %v", err)
-		return nil, ethtypes.EthAddress{}, address.Address{}
+		return nil, ethtypes.EthAddress{}, address.Address{}, fmt.Errorf("failed to cast Ethereum address: %w", err)
 	}
 
 	addr, err := ea.ToFilecoinAddress()
 	if err != nil {
-		log.Printf("Failed to convert Ethereum address to Filecoin address: %v", err)
-		return nil, ethtypes.EthAddress{}, address.Address{}
+		return nil, ethtypes.EthAddress{}, address.Address{}, fmt.Errorf("failed to convert Ethereum address to Filecoin address: %w", err)
 	}
-	return key, *(*ethtypes.EthAddress)(ethAddr), addr
+	return key, *(*ethtypes.EthAddress)(ethAddr), addr, nil
 }
 
-func appendEthereumKeyToFile(path string, key *key.Key, ethAddr ethtypes.EthAddress, filAddr address.Address) error {
+func appendEthereumKeyToJSONFile(path string, name string, key *key.Key, ethAddr ethtypes.EthAddress, filAddr address.Address) error {
 	if key == nil {
 		return fmt.Errorf("key is nil")
 	}
 
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	// Read existing file or create new structure
+	var accountsFile AccountsFile
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		if os.IsNotExist(err) {
+			// File doesn't exist, create new structure
+			accountsFile = AccountsFile{
+				Accounts: make(map[string]AccountInfo),
+			}
+		} else {
+			return fmt.Errorf("failed to read file: %w", err)
+		}
+	} else {
+		// Parse existing JSON
+		if err := json.Unmarshal(data, &accountsFile); err != nil {
+			return fmt.Errorf("failed to parse JSON: %w", err)
+		}
+		if accountsFile.Accounts == nil {
+			accountsFile.Accounts = make(map[string]AccountInfo)
+		}
 	}
-	defer file.Close()
 
-	_, err = fmt.Fprintf(file, "Ethereum Address: %s\nFilecoin Address: %s\nPrivate Key: 0x%x\n---\n", ethAddr.String(), filAddr.String(), key.PrivateKey)
-	return err
+	// Check if name already exists
+	if _, exists := accountsFile.Accounts[name]; exists {
+		return fmt.Errorf("account with name '%s' already exists", name)
+	}
+
+	// Add new account
+	accountsFile.Accounts[name] = AccountInfo{
+		Address:    filAddr.String(),
+		EthAddress: ethAddr.String(),
+		PrivateKey: fmt.Sprintf("0x%x", key.PrivateKey),
+	}
+
+	// Write back to file
+	updatedData, err := json.MarshalIndent(accountsFile, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	if err := os.WriteFile(path, updatedData, 0600); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return nil
 }
 
 func CreateEthereumWallet(ctx context.Context, fund bool) (address.Address, error) {
-	key, ethAddr, addr := NewAccount()
+	_, ethAddr, addr, err := NewAccount()
+	if err != nil {
+		return address.Undef, fmt.Errorf("failed to create account: %w", err)
+	}
 	if fund {
 		_, err := FundWallet(ctx, addr, types.BigMul(types.NewInt(1e18), types.NewInt(1)), true)
 		if err != nil {
 			return address.Undef, fmt.Errorf("failed to fund wallet: %w", err)
 		}
 	}
-	log.Printf("Private Key: %s", key.PrivateKey)
-	log.Printf("Ethereum Address: %s", ethAddr)
-	log.Printf("Filecoin Address: %s", addr)
+	fmt.Printf("Ethereum Address: %s\n", ethAddr)
+	fmt.Printf("Filecoin Address: %s\n", addr)
 	return addr, nil
 }
 
@@ -134,6 +174,76 @@ func FundWallet(ctx context.Context, to address.Address, amount abi.TokenAmount,
 	return smsg, nil
 }
 
+// CreateEthKeystore creates an Ethereum keystore file from a private key
+// Returns the path to the created keystore file and the address
+func CreateEthKeystore(privateKey *ecdsa.PrivateKey, password string, outputDir string) (string, string, error) {
+	if err := os.MkdirAll(outputDir, 0700); err != nil {
+		return "", "", fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	ks := keystore.NewKeyStore(outputDir, keystore.StandardScryptN, keystore.StandardScryptP)
+
+	account, err := ks.ImportECDSA(privateKey, password)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to create keystore: %w", err)
+	}
+
+	// Find the created keystore file
+	files, err := os.ReadDir(outputDir)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to read output directory: %w", err)
+	}
+
+	// Find the newest file with the account address in its name
+	addrLower := strings.ToLower(account.Address.Hex()[2:])
+	var keystoreFile string
+	for _, f := range files {
+		if strings.Contains(strings.ToLower(f.Name()), addrLower) {
+			keystoreFile = filepath.Join(outputDir, f.Name())
+			break
+		}
+	}
+
+	if keystoreFile == "" {
+		return "", "", fmt.Errorf("keystore file not found after creation")
+	}
+
+	return keystoreFile, account.Address.Hex(), nil
+}
+
+// CreateEthKeystoreFromHex creates an Ethereum keystore from a hex-encoded private key
+func CreateEthKeystoreFromHex(privateKeyHex string, password string, outputDir string) (string, string, error) {
+	privateKeyHex = strings.TrimPrefix(privateKeyHex, "0x")
+
+	privateKeyBytes, err := hex.DecodeString(privateKeyHex)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to decode private key: %w", err)
+	}
+
+	privateKey, err := crypto.ToECDSA(privateKeyBytes)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to parse private key: %w", err)
+	}
+
+	return CreateEthKeystore(privateKey, password, outputDir)
+}
+
+// GenerateNewEthKeystore creates a new Ethereum keystore with a fresh key
+func GenerateNewEthKeystore(password string, outputDir string) (string, string, string, error) {
+	privateKey, err := crypto.GenerateKey()
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to generate key: %w", err)
+	}
+
+	keystoreFile, address, err := CreateEthKeystore(privateKey, password, outputDir)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	privateKeyHex := hex.EncodeToString(crypto.FromECDSA(privateKey))
+	return keystoreFile, address, privateKeyHex, nil
+}
+
 var WalletCmd = &cli.Command{
 	Name:  "wallet",
 	Usage: "Wallet operations",
@@ -167,7 +277,11 @@ var WalletCmd = &cli.Command{
 				},
 				&cli.StringFlag{
 					Name:  "key-output",
-					Usage: "File to append generated private keys (Ethereum wallets)",
+					Usage: "JSON file to append generated accounts (Ethereum wallets)",
+				},
+				&cli.StringFlag{
+					Name:  "name",
+					Usage: "Account name for generated wallet (required with --key-output)",
 				},
 			},
 			Action: func(c *cli.Context) error {
@@ -182,20 +296,28 @@ var WalletCmd = &cli.Command{
 				// Parse fund amount if provided
 				var fundAmount abi.TokenAmount
 				if fundAmountStr != "" {
-					amount, _ := big.FromString(fundAmountStr)
-					// Convert FIL to attoFIL
+					amount, err := big.FromString(fundAmountStr)
+					if err != nil {
+						return fmt.Errorf("invalid fund amount '%s': %w", fundAmountStr, err)
+					}
 					fundAmount = types.BigMul(amount, types.NewInt(1e18))
 				}
 
 				if walletType == "ethereum" {
 					keyOutput := c.String("key-output")
-					// Create Ethereum wallets
+					accountName := c.String("name")
+
+					// Validate name is provided when key-output is specified
+					if keyOutput != "" && accountName == "" {
+						return fmt.Errorf("--name is required when using --key-output")
+					}
+
 					fmt.Printf("Creating %d Ethereum wallet(s):\n", count)
 
 					for i := 0; i < count; i++ {
-						key, ethAddr, filAddr := NewAccount()
-						if key == nil {
-							return fmt.Errorf("failed to create wallet %d", i+1)
+						key, ethAddr, filAddr, err := NewAccount()
+						if err != nil {
+							return fmt.Errorf("failed to create wallet %d: %w", i+1, err)
 						}
 
 						fmt.Printf("\nWallet %d:\n", i+1)
@@ -207,10 +329,15 @@ var WalletCmd = &cli.Command{
 						}
 
 						if keyOutput != "" {
-							if err := appendEthereumKeyToFile(keyOutput, key, ethAddr, filAddr); err != nil {
+							// Generate account name with suffix for multiple wallets
+							name := accountName
+							if count > 1 {
+								name = fmt.Sprintf("%s_%d", accountName, i+1)
+							}
+							if err := appendEthereumKeyToJSONFile(keyOutput, name, key, ethAddr, filAddr); err != nil {
 								return fmt.Errorf("failed to write key to %s: %w", keyOutput, err)
 							}
-							fmt.Printf("  Saved key material to %s\n", keyOutput)
+							fmt.Printf("  Saved account '%s' to %s\n", name, keyOutput)
 						}
 
 						// Fund wallet if amount specified
@@ -311,9 +438,11 @@ var WalletCmd = &cli.Command{
 				}
 
 				amountStr := c.Args().Get(1)
-				amount, _ := big.FromString(amountStr)
+				amount, err := big.FromString(amountStr)
+				if err != nil {
+					return fmt.Errorf("invalid amount '%s': %w", amountStr, err)
+				}
 
-				// Convert FIL to attoFIL
 				fundAmount := types.BigMul(amount, types.NewInt(1e18))
 
 				smsg, err := FundWallet(ctx, addr, fundAmount, true)
@@ -350,6 +479,104 @@ var WalletCmd = &cli.Command{
 				// Convert attoFIL to FIL for display
 				filBalance := types.BigDiv(balance, types.NewInt(1e18))
 				fmt.Printf("Balance for %s: %s FIL (%s attoFIL)\n", addr, filBalance.String(), balance.String())
+				return nil
+			},
+		},
+		{
+			Name:  "eth-keystore",
+			Usage: "Create Ethereum keystore file (for use with forge/cast tools)",
+			Flags: []cli.Flag{
+				&cli.StringFlag{
+					Name:     "password",
+					Usage:    "Password to encrypt the keystore (required)",
+					Required: true,
+				},
+				&cli.StringFlag{
+					Name:  "output",
+					Value: ".",
+					Usage: "Output directory for keystore file",
+				},
+				&cli.StringFlag{
+					Name:  "private-key",
+					Usage: "Existing private key to convert (hex format, with or without 0x prefix). If not provided, generates new key",
+				},
+				&cli.StringFlag{
+					Name:  "from-accounts",
+					Usage: "Path to accounts JSON file to extract private key from (use with --account-name)",
+				},
+				&cli.StringFlag{
+					Name:  "account-name",
+					Usage: "Account name to extract from accounts JSON file (use with --from-accounts)",
+				},
+				&cli.BoolFlag{
+					Name:  "show-private-key",
+					Usage: "Show the private key in output (only for newly generated keys)",
+				},
+			},
+			Action: func(c *cli.Context) error {
+				password := c.String("password")
+				outputDir := c.String("output")
+				privateKeyHex := c.String("private-key")
+				fromAccounts := c.String("from-accounts")
+				accountName := c.String("account-name")
+				showPrivateKey := c.Bool("show-private-key")
+
+				// Validate mutually exclusive options
+				if privateKeyHex != "" && fromAccounts != "" {
+					return fmt.Errorf("--private-key and --from-accounts are mutually exclusive")
+				}
+
+				// Handle --from-accounts option
+				if fromAccounts != "" {
+					if accountName == "" {
+						return fmt.Errorf("--account-name is required when using --from-accounts")
+					}
+
+					data, err := os.ReadFile(fromAccounts)
+					if err != nil {
+						return fmt.Errorf("failed to read accounts file: %w", err)
+					}
+
+					var accountsFile AccountsFile
+					if err := json.Unmarshal(data, &accountsFile); err != nil {
+						return fmt.Errorf("failed to parse accounts file: %w", err)
+					}
+
+					account, exists := accountsFile.Accounts[accountName]
+					if !exists {
+						return fmt.Errorf("account '%s' not found in accounts file", accountName)
+					}
+
+					privateKeyHex = account.PrivateKey
+					fmt.Printf("Extracting key for account '%s' (address: %s)\n", accountName, account.EthAddress)
+				}
+
+				if privateKeyHex != "" {
+					keystoreFile, address, err := CreateEthKeystoreFromHex(privateKeyHex, password, outputDir)
+					if err != nil {
+						return err
+					}
+					fmt.Printf("Created ETH keystore from existing key:\n")
+					fmt.Printf("  Address: %s\n", address)
+					fmt.Printf("  Keystore: %s\n", keystoreFile)
+				} else {
+					keystoreFile, address, privKey, err := GenerateNewEthKeystore(password, outputDir)
+					if err != nil {
+						return err
+					}
+					fmt.Printf("Generated new ETH keystore:\n")
+					fmt.Printf("  Address: %s\n", address)
+					fmt.Printf("  Keystore: %s\n", keystoreFile)
+					if showPrivateKey {
+						fmt.Printf("  Private Key: 0x%s\n", privKey)
+					}
+				}
+
+				fmt.Printf("\nUsage with forge/cast:\n")
+				fmt.Printf("  export ETH_KEYSTORE=<keystore-file-path>\n")
+				fmt.Printf("  export PASSWORD=<your-password>\n")
+				fmt.Printf("  cast wallet address --password \"$PASSWORD\"\n")
+
 				return nil
 			},
 		},

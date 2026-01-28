@@ -16,8 +16,8 @@ var (
 // NewApp creates a new CLI app
 func NewApp() *cli.App {
 	app := &cli.App{
-		Name:  "mpool-tx",
-		Usage: "Filecoin testing tool",
+		Name:  "filwizard",
+		Usage: "Smart contract deployment and wallet management tool for Filecoin",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "rpc",
@@ -66,6 +66,8 @@ func NewApp() *cli.App {
 		Commands: []*cli.Command{
 			WalletCmd,
 			ContractCmd,
+			AccountsCmd,
+			PaymentsCmd,
 		},
 	}
 	return app

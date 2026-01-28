@@ -17,6 +17,8 @@ import (
 	"github.com/filecoin-project/lotus/chain/types/ethtypes"
 )
 
+const DefaultKeystorePassword = "filwizard"
+
 type ProjectType string
 
 const (
@@ -62,10 +64,12 @@ type AccountsFile struct {
 }
 
 type ContractManager struct {
-	workspaceDir    string
-	deploymentsFile string
-	deployerKey     string
-	rpcURL          string
+	workspaceDir     string
+	deploymentsFile  string
+	deployerKey      string
+	keystorePath     string
+	keystorePassword string
+	rpcURL           string
 }
 
 func NewContractManager(workspaceDir, rpcURL string) *ContractManager {
@@ -75,14 +79,25 @@ func NewContractManager(workspaceDir, rpcURL string) *ContractManager {
 	os.MkdirAll(contractsDir, 0755)
 
 	return &ContractManager{
-		workspaceDir:    absWorkspaceDir,
-		deploymentsFile: filepath.Join(absWorkspaceDir, "deployments.json"),
-		rpcURL:          rpcURL,
+		workspaceDir:     absWorkspaceDir,
+		deploymentsFile:  filepath.Join(absWorkspaceDir, "deployments.json"),
+		keystorePassword: DefaultKeystorePassword,
+		rpcURL:           rpcURL,
 	}
 }
 
 func (cm *ContractManager) SetDeployerKey(privateKey string) {
 	cm.deployerKey = privateKey
+
+	// Create ETH keystore from the key for tools that require it (e.g., forge, cast)
+	keystoreDir := filepath.Join(cm.workspaceDir, "keystore")
+	keystoreFile, _, err := CreateEthKeystoreFromHex(privateKey, cm.keystorePassword, keystoreDir)
+	if err != nil {
+		fmt.Printf("Warning: failed to create ETH keystore: %v\n", err)
+		return
+	}
+	cm.keystorePath = keystoreFile
+	fmt.Printf("Created ETH keystore at %s (password: %s)\n", keystoreFile, cm.keystorePassword)
 }
 
 func (cm *ContractManager) GetDeployerKey() string {
@@ -255,6 +270,13 @@ func (cm *ContractManager) CloneRepository(project *ContractProject) error {
 			// Non-fatal
 			fmt.Printf("Note: Could not clean after clone commands (might be expected)\n")
 		}
+
+		// Create marker file to indicate clone commands have been executed
+		// This allows deploy-local to skip re-running them in air-gapped environments
+		markerFile := filepath.Join(project.CloneDir, ".clone_commands_done")
+		if err := os.WriteFile(markerFile, []byte("done\n"), 0644); err != nil {
+			fmt.Printf("Warning: failed to create marker file %s: %v\n", markerFile, err)
+		}
 	}
 
 	return nil
@@ -327,16 +349,29 @@ func (cm *ContractManager) CompileFoundryProject(project *ContractProject) error
 }
 
 func (cm *ContractManager) CreateDeployerAccount() (string, ethtypes.EthAddress, error) {
-	key, ethAddr, filAddr := NewAccount()
+	key, ethAddr, filAddr, err := NewAccount()
+	if err != nil {
+		return "", ethtypes.EthAddress{}, fmt.Errorf("failed to create account: %w", err)
+	}
 
 	fundAmount := types.FromFil(10)
-	_, err := FundWallet(context.Background(), filAddr, fundAmount, true)
+	_, err = FundWallet(context.Background(), filAddr, fundAmount, true)
 	if err != nil {
 		return "", ethtypes.EthAddress{}, fmt.Errorf("failed to fund deployer account: %w", err)
 	}
 
 	privateKey := fmt.Sprintf("0x%x", key.PrivateKey)
 	cm.deployerKey = privateKey
+
+	// Create ETH keystore for tools that require it (e.g., forge, cast)
+	keystoreDir := filepath.Join(cm.workspaceDir, "keystore")
+	keystoreFile, _, err := CreateEthKeystoreFromHex(privateKey, cm.keystorePassword, keystoreDir)
+	if err != nil {
+		fmt.Printf("Warning: failed to create ETH keystore: %v\n", err)
+	} else {
+		cm.keystorePath = keystoreFile
+		fmt.Printf("Created ETH keystore at %s (password: %s)\n", keystoreFile, cm.keystorePassword)
+	}
 
 	return privateKey, ethAddr, nil
 }
@@ -604,8 +639,16 @@ func (cm *ContractManager) RunCustomDeployScript(project *ContractProject, scrip
 		cmd.Env = append(cmd.Env, fmt.Sprintf("PRIVATE_KEY=%s", cm.deployerKey))
 	}
 
+	// Pass ETH keystore for forge/cast tools
+	if cm.keystorePath != "" {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("ETH_KEYSTORE=%s", cm.keystorePath))
+		cmd.Env = append(cmd.Env, fmt.Sprintf("PASSWORD=%s", cm.keystorePassword))
+	}
+
 	if cm.rpcURL != "" {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("RPC_URL=%s", cm.rpcURL))
+		cmd.Env = append(cmd.Env, fmt.Sprintf("ETH_RPC_URL=%s", cm.rpcURL))
+		cmd.Env = append(cmd.Env, fmt.Sprintf("FILECOIN_RPC=%s", cm.rpcURL))
 	}
 
 	output, err := cmd.CombinedOutput()
@@ -747,6 +790,38 @@ func (cm *ContractManager) saveDeployerAccount(contract *DeployedContract) error
 		}
 
 		fmt.Printf("Added deployer account to %s\n", accountsPath)
+
+		// Also create ETH keystore for use with forge/cast tools
+		if contract.DeployerPrivateKey != "" {
+			keystoreDir := filepath.Join(cm.workspaceDir, "keystore")
+			keystoreFile, _, err := CreateEthKeystoreFromHex(contract.DeployerPrivateKey, DefaultKeystorePassword, keystoreDir)
+			if err != nil {
+				return fmt.Errorf("failed to create ETH keystore: %w", err)
+			}
+			fmt.Printf("Created ETH keystore at %s\n", keystoreFile)
+			fmt.Printf("  Password: %s\n", DefaultKeystorePassword)
+
+			// Write a helper script to set environment variables
+			envScript := fmt.Sprintf(`#!/bin/bash
+# Environment variables for deployer account
+# Source this file: source %s/deployer-env.sh
+
+export ETH_KEYSTORE="%s"
+export PASSWORD="%s"
+
+echo "Deployer environment loaded:"
+echo "  ETH_KEYSTORE=$ETH_KEYSTORE"
+echo "  PASSWORD is set"
+`, cm.workspaceDir, keystoreFile, DefaultKeystorePassword)
+
+			envScriptPath := filepath.Join(cm.workspaceDir, "deployer-env.sh")
+			if err := os.WriteFile(envScriptPath, []byte(envScript), 0755); err != nil {
+				fmt.Printf("Warning: failed to write deployer-env.sh: %v\n", err)
+			} else {
+				fmt.Printf("Created deployer environment script: %s\n", envScriptPath)
+				fmt.Printf("  Usage: source %s\n", envScriptPath)
+			}
+		}
 	}
 
 	return nil
