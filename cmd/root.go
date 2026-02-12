@@ -48,6 +48,11 @@ func NewApp() *cli.App {
 				cfg.Verbose = c.Bool("verbose")
 			}
 
+			// Skip RPC initialization for env commands (they're file-based only)
+			if len(os.Args) > 1 && os.Args[1] == "env" {
+				return nil
+			}
+
 			// Initialize client
 			var err error
 			clientt, err = config.New(cfg)
@@ -68,6 +73,7 @@ func NewApp() *cli.App {
 			ContractCmd,
 			AccountsCmd,
 			PaymentsCmd,
+			EnvCmd,
 		},
 	}
 	return app
