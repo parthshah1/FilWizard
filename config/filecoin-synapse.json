@@ -65,7 +65,7 @@
       "constructor_args": [],
       "dependencies": [],
       "script_dir": "service_contracts",
-      "deploy_script": "tools/deploy-all-warm-storage.sh",
+      "deploy_script": "tools/warm-storage-deploy-all.sh",
       "clone_commands": [
         "git submodule update --init --recursive",
         "cd service_contracts && forge config --fix",
