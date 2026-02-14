@@ -237,6 +237,7 @@ func scanServiceContracts(workspacePath, chainID string) (map[string]string, err
 
 		// Look for deployments.json files in subdirectories
 		if info.Name() == "deployments.json" && path != filepath.Join(workspacePath, "deployments.json") {
+			fmt.Printf("DEBUG: Found deployments.json at %s, attempting to parse...\n", path)
 			data, err := os.ReadFile(path)
 			if err != nil {
 				fmt.Printf("Warning: Failed to read %s: %v\n", path, err)
@@ -246,12 +247,17 @@ func scanServiceContracts(workspacePath, chainID string) (map[string]string, err
 			// Try to parse as service contract format (map[chainID]map[key]address)
 			var serviceFormat map[string]map[string]string
 			if err := json.Unmarshal(data, &serviceFormat); err == nil {
+				fmt.Printf("DEBUG: Successfully parsed as service contract format, looking for chain %s\n", chainID)
 				if chainData, ok := serviceFormat[chainID]; ok {
 					for key, address := range chainData {
 						addresses[key] = address
 					}
 					fmt.Printf("Loaded %d addresses from service contracts: %s\n", len(chainData), path)
+				} else {
+					fmt.Printf("DEBUG: Chain %s not found in service format (available chains: %v)\n", chainID, getMapKeys(serviceFormat))
 				}
+			} else {
+				fmt.Printf("DEBUG: Failed to parse as service format: %v\n", err)
 			}
 			// If it doesn't parse as service format, skip it (it's likely the base format)
 		}
@@ -264,6 +270,15 @@ func scanServiceContracts(workspacePath, chainID string) (map[string]string, err
 	}
 
 	return addresses, nil
+}
+
+// getMapKeys returns the keys of a map for debug logging
+func getMapKeys(m map[string]map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // writeEnvFile writes the formatted environment file
