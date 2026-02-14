@@ -244,15 +244,25 @@ func scanServiceContracts(workspacePath, chainID string) (map[string]string, err
 				return nil
 			}
 
-			// Try to parse as service contract format (map[chainID]map[key]address)
-			var serviceFormat map[string]map[string]string
+			// Try to parse as service contract format (map[chainID]map[key]value)
+			// Uses interface{} because the JSON may contain a "metadata" object alongside string addresses
+			var serviceFormat map[string]map[string]interface{}
 			if err := json.Unmarshal(data, &serviceFormat); err == nil {
 				fmt.Printf("DEBUG: Successfully parsed as service contract format, looking for chain %s\n", chainID)
 				if chainData, ok := serviceFormat[chainID]; ok {
-					for key, address := range chainData {
-						addresses[key] = address
+					for key, value := range chainData {
+						// Skip metadata object
+						if key == "metadata" {
+							continue
+						}
+						// Type assert to string (contract addresses should be strings)
+						if address, ok := value.(string); ok {
+							addresses[key] = address
+						} else {
+							fmt.Printf("Warning: Skipping non-string value for key %s\n", key)
+						}
 					}
-					fmt.Printf("Loaded %d addresses from service contracts: %s\n", len(chainData), path)
+					fmt.Printf("Loaded %d addresses from service contracts: %s\n", len(addresses), path)
 				} else {
 					fmt.Printf("DEBUG: Chain %s not found in service format (available chains: %v)\n", chainID, getMapKeys(serviceFormat))
 				}
@@ -273,7 +283,7 @@ func scanServiceContracts(workspacePath, chainID string) (map[string]string, err
 }
 
 // getMapKeys returns the keys of a map for debug logging
-func getMapKeys(m map[string]map[string]string) []string {
+func getMapKeys(m map[string]map[string]interface{}) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
