@@ -32,22 +32,29 @@ import (
 )
 
 func waitForTransactionReceipt(ctx context.Context, api api.FullNode, txHash ethtypes.EthHash) (*api.EthTxReceipt, error) {
-	for i := 0; i < 60; i++ {
-		receipt, err := api.EthGetTransactionReceipt(ctx, txHash)
-		if err == nil && receipt != nil {
-			if receipt.Status == 1 {
-				fmt.Printf("Transaction confirmed: %s\n", txHash.String())
-				return receipt, nil
-			} else {
+	backoff := 500 * time.Millisecond
+	deadline := time.After(2 * time.Minute)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-deadline:
+			return nil, fmt.Errorf("transaction not confirmed after 2m: %s", txHash.String())
+		case <-time.After(backoff):
+			receipt, err := api.EthGetTransactionReceipt(ctx, txHash)
+			if err == nil && receipt != nil {
+				if receipt.Status == 1 {
+					fmt.Printf("Transaction confirmed: %s\n", txHash.String())
+					return receipt, nil
+				}
 				return nil, fmt.Errorf("transaction failed: %s", txHash.String())
 			}
+			fmt.Printf("Waiting for transaction confirmation... %s\n", txHash.String())
+			if backoff < 4*time.Second {
+				backoff = backoff * 2
+			}
 		}
-
-		fmt.Printf("Waiting for transaction confirmation... %s\n", txHash.String())
-		time.Sleep(1 * time.Second)
 	}
-
-	return nil, fmt.Errorf("transaction not confirmed after waiting")
 }
 
 func SignTransaction(tx *ethtypes.Eth1559TxArgs, privateKey []byte) error {
@@ -114,9 +121,6 @@ func DeployContract(ctx context.Context, contractPath string, deployer string, f
 		}
 		fmt.Printf("Funded deployer with %s FIL\n", fundAmount)
 	}
-
-	fmt.Println("Waiting for funds to be available...")
-	time.Sleep(5 * time.Second)
 
 	contractHex, err := os.ReadFile(contractPath)
 	if err != nil {
@@ -1077,11 +1081,6 @@ func deployFromLocal(c *cli.Context) error {
 				fmt.Printf("Warning: failed to ensure clone commands for %s: %v\n", cdef.Name, err)
 			}
 
-			// Wait extra time before custom script to ensure previous transactions are mined
-			// Custom scripts may deploy multiple contracts sequentially and need clean nonce state
-			fmt.Printf("Waiting 10s for previous transactions to confirm before running custom script...\n")
-			time.Sleep(10 * time.Second)
-
 			fmt.Printf("Running custom deployment script: %s\n", cdef.DeployScript)
 			var err error
 			scriptOutput, err = manager.RunCustomDeployScript(project, cdef.DeployScript)
@@ -1200,9 +1199,6 @@ func deployFromLocal(c *cli.Context) error {
 			fmt.Printf("Warning: Post-deployment actions failed for %s: %v\n", cdef.Name, err)
 		}
 
-		// Wait longer for transaction to be mined and nonce to update
-		fmt.Printf("Waiting for transaction confirmation...\n")
-		time.Sleep(20 * time.Second)
 	}
 
 	fmt.Println("All deployments completed. Check deployments with: ./mpool-tx contract list")
@@ -1673,9 +1669,6 @@ func callWriteMethod(c *cli.Context) error {
 		}
 
 		fmt.Printf("Account '%s' created and saved: %s\n", fromRole, ethAddr.String())
-
-		fmt.Println("Waiting for funds to be available...")
-		time.Sleep(5 * time.Second)
 	}
 
 	cfg, err := loadWorkspaceConfig()
