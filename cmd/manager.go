@@ -987,7 +987,7 @@ func (cm *ContractManager) ImportScriptOutputToDeployments(contractsConfigPath, 
 
 	// Parse lines for patterns like 'Name: 0x...' or 'Name 0x...'
 	reAddr := regexp.MustCompile(`0x[0-9a-fA-F]{40}`)
-	reNameAddr := regexp.MustCompile(`(?i)^\s*([A-Za-z0-9_\-]+)[:\s]+(0x[0-9a-fA-F]{40})`) // captures name and addr
+	reNameAddr := regexp.MustCompile(`(?i)^\s*([A-Za-z0-9_\-\s]+?)[:\s]+(0x[0-9a-fA-F]{40})`) // captures name and addr (supports spaces)
 
 	parsedCount := 0
 	for _, line := range lines {

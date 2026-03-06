@@ -218,22 +218,29 @@ func (cw *ContractWrapper) encodeArguments(args []interface{}) ([]byte, error) {
 }
 
 func (cw *ContractWrapper) waitForTransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error) {
-	for i := 0; i < 60; i++ {
-		receipt, err := cw.client.TransactionReceipt(ctx, txHash)
-		if err == nil && receipt != nil {
-			if receipt.Status == 1 {
-				fmt.Printf("Transaction confirmed: %s\n", txHash.Hex())
-				return receipt, nil
-			} else {
+	backoff := 500 * time.Millisecond
+	deadline := time.After(2 * time.Minute)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-deadline:
+			return nil, fmt.Errorf("transaction not confirmed after 2m: %s", txHash.Hex())
+		case <-time.After(backoff):
+			receipt, err := cw.client.TransactionReceipt(ctx, txHash)
+			if err == nil && receipt != nil {
+				if receipt.Status == 1 {
+					fmt.Printf("Transaction confirmed: %s\n", txHash.Hex())
+					return receipt, nil
+				}
 				return nil, fmt.Errorf("transaction failed: %s", txHash.Hex())
 			}
+			fmt.Printf("Waiting for transaction confirmation... %s\n", txHash.Hex())
+			if backoff < 4*time.Second {
+				backoff = backoff * 2
+			}
 		}
-
-		fmt.Printf("Waiting for transaction confirmation... %s\n", txHash.Hex())
-		time.Sleep(1 * time.Second)
 	}
-
-	return nil, fmt.Errorf("transaction not confirmed after waiting")
 }
 
 func (cw *ContractWrapper) Close() {

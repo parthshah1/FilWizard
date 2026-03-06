@@ -65,7 +65,7 @@
       "constructor_args": [],
       "dependencies": [],
       "script_dir": "service_contracts",
-      "deploy_script": "tools/deploy-all-warm-storage.sh",
+      "deploy_script": "tools/warm-storage-deploy-all.sh",
       "clone_commands": [
         "git submodule update --init --recursive",
         "cd service_contracts && forge config --fix",
@@ -81,7 +81,13 @@
         "AUTO_VERIFY": "false"
       },
       "exports": {
-        "FILECOIN_WARM_STORAGE_ADDRESS": "self"
+        "FILECOIN_WARM_STORAGE_ADDRESS": "FWSS_PROXY_ADDRESS",
+        "PDP_VERIFIER_ADDRESS": "PDP_VERIFIER_PROXY_ADDRESS",
+        "SERVICE_PROVIDER_REGISTRY_ADDRESS": "SERVICE_PROVIDER_REGISTRY_PROXY_ADDRESS",
+        "FILECOIN_PAY_ADDRESS": "FILECOIN_PAY_ADDRESS",
+        "SESSION_KEY_REGISTRY_ADDRESS": "SESSION_KEY_REGISTRY_ADDRESS",
+        "FWSS_VIEW_ADDRESS": "FWSS_VIEW_ADDRESS",
+        "ENDORSEMENT_SET_ADDRESS": "ENDORSEMENT_SET_ADDRESS"
       }
     }
   ]
