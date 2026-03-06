@@ -547,7 +547,6 @@ func (c *ContractsConfig) UpdateEnvironmentWithDeployments(contractName string, 
 		for exportName, target := range contract.Exports {
 			resolvedValue, err := resolveExportValue(target, contractName, deployments)
 			if err != nil {
-				fmt.Printf("  Warning: failed to resolve export %s for %s: %v\n", exportName, contractName, err)
 				continue
 			}
 			os.Setenv(exportName, resolvedValue)

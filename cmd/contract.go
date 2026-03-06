@@ -1148,7 +1148,6 @@ func deployFromLocal(c *cli.Context) error {
 				}
 			}
 			if deployedContract == nil {
-				fmt.Printf("Warning: contract %s not found in deployments after script execution\n", cdef.Name)
 				// Create a dummy deployed contract for post-deployment steps
 				deployedContract = &DeployedContract{
 					Name: cdef.Name,
