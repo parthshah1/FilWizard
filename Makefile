@@ -5,3 +5,7 @@ build:
 
 clean:
 	rm -f mpool-tx
+
+.PHONY: docker
+docker:
+	docker build -t filwizard:latest .
